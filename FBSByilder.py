@@ -98,6 +98,7 @@ class FBSBuilderEnv(gym.Env):
 
         # internal state
         self.grid = None  # shape (layers, cells)
+        self.grid_human = None  # shape (layers, cells)
         self.current_layer_numb = None
         self.step_count = 0
 
@@ -164,42 +165,29 @@ class FBSBuilderEnv(gym.Env):
         
 
     # ========= Core penalty ============
-    def _bonding_block_penalty(self, layer, start, end, heighth=600, step=20):
+    def _bonding_block_penalty(self, layer: int, heighth: int, step: int) -> int:
         if layer == 0:
             return 0
-        
-        min_value = 0.4 * heighth
-        min_steps = int(min_value // step)
-         
-        num_layers = self.grid.shape[0]
-        layer_len = self.grid.shape[1]
-        lower_layer = (
-            self.grid[layer + 1]
-            if layer + 1 < num_layers
-            else self.grid[layer]
-        )
 
-        start_check = max(0, start - min_steps)
-        end_check = min(layer_len, end + min_steps)
+        min_mm = 0.4 * heighth
+        min_cells = int(min_mm // step)
 
-        testing_place = lower_layer[start_check:end_check]
-        if abs(testing_place[0]) == 1 or abs(testing_place[-1]) == 1:
-            return 20 # the agent should try not to get seam on the monolith.
+        cur = self.grid[layer]
+        below = self.grid[layer - 1]
 
-        indices = np.where(testing_place == -1)[0]
+        seams_cur = self._find_boundaries(cur)
+        seams_below = self._find_boundaries(below)
 
-        if indices.size == 0:
-            return 0 # no borders between the blocks
+        if len(seams_cur) == 0 or len(seams_below) == 0:
+            return 0
 
-        length = testing_place.size
+        penalty = 0
+        for s in seams_cur:
+            d = np.min(np.abs(seams_below - s))
+            if d < min_cells:
+                penalty += 5  
 
-        left_indent = indices[0] * step
-        right_indent = (length - 1 - indices[-1]) * step
-
-        if not (left_indent > min_value and right_indent > min_value):
-            return 100
-        
-        return 0
+        return penalty
     
     def _big_mon_penalty(self, layer: int) -> int:
         """
@@ -227,6 +215,13 @@ class FBSBuilderEnv(gym.Env):
             if g > min_block_cells:
                 reward += 100
         return reward
+    
+    def _find_boundaries(self, row: np.ndarray) -> np.ndarray:
+        bounds = []
+        for i in range(len(row) - 1):
+            if row[i] != 0 and row[i+1] != 0 and row[i] != row[i+1]:
+                bounds.append(i)
+        return np.array(bounds, dtype=np.int32)
 
     # =========- Action mask / legal actions =========-
     def compute_action_mask(self) -> np.ndarray:
@@ -259,6 +254,7 @@ class FBSBuilderEnv(gym.Env):
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
         self.grid = np.zeros((self.num_layers, self.num_cells), dtype=np.int32)
+        self.grid_human = np.zeros((self.num_layers, self.num_cells), dtype=np.int32)
 
         self.instance_counter = 1
         self.instances = {}
@@ -309,30 +305,26 @@ class FBSBuilderEnv(gym.Env):
             return fail()
 
         # ========= Place block =========
-        block_id = self.block_types[t_idx].id
-        self.grid[layer, start:end] = block_id
+        instance_id = self.instance_counter
+        self.instance_counter += 1
 
+        block_type_id = self.block_types[t_idx].id
+
+        self.instances[instance_id] = {
+            "type_id": block_type_id,
+            "layer": layer,
+            "start": start,
+            "end": end,
+        }
+
+        self.grid[layer, start:end] = instance_id
+        self.grid_human[layer, start:end] = block_type_id
         # mark separator if not monolith
-        if block_id != 1:
-            self.reward -= self._bonding_block_penalty(layer=layer, 
-                                                        start=start, 
-                                                        end=end, 
-                                                        heighth=self.wall_instance.height_mm,
-                                                        step=self.wall_instance.grid_step)
-            if end == self.num_cells:
-                self.grid[layer, end-1] = -1
-            else:
-                """
-                fix  [ 0  0  0  0  0  5  5  5  5  5  5  5  5  5  5  5  5  5  5  5  5  5  5  5
-                        5  5  5  5  5  5  5  5  5  5  5  5  5  5  5  5  5  5  5  5 -1  0  0  0
-                        0  0  0  0  0  1  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0
-                        0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0
-                        0  0  0  0  0  0  0  0  1  0  0  0  0  0  0  0  0  0  0  0  0  0  0  0
-                        0  6  6  6  6  6  6  6  6  6  6  6  6  6  6  6  6  6  6  6  6  6  6  6
-                        6  6  6  6  6 -1]
-                
-                """
-                self.grid[layer, end] = -1
+  
+        self.reward -= self._bonding_block_penalty(layer=layer,
+                                                    heighth=600,
+                                                    step=self.wall_instance.grid_step)
+
         # ========= Layer completion =========
         if np.all(self.grid[layer] != 0):
             # self.reward += 50.0
@@ -355,11 +347,19 @@ class FBSBuilderEnv(gym.Env):
 
     def _get_obs(self) -> Dict[str, Any]:
         mask = self.compute_action_mask()
+        type_grid = np.zeros_like(self.grid, dtype=np.int16)
+
+        for inst_id, meta in self.instances.items():
+            layer = meta["layer"]
+            start = meta["start"]
+            end = meta["end"]
+            type_grid[layer, start:end] = meta["type_id"]
+
         obs = {
-            "grid": self.grid.copy(),
+            "grid": type_grid,
             "current_layer": np.int64(self.current_layer_numb),
             "action_mask": mask
-        }
+}
         return obs
     
     def get_action_mask(self):
@@ -377,10 +377,16 @@ class FBSBuilderEnv(gym.Env):
         return np.concatenate([type_mask, start_mask])
     
     def render(self):
-        if self.render_mode in ("terminal", "human"):
+        if "terminal" in self.render_mode:
+            if "human" in self.render_mode:
+                grid = self.grid_human
+            else:
+                grid = self.grid
+
+
             print(f"\n=== Wall state: === \nCurrent_layer:{self.current_layer_numb}, step: {self.step_count}, reward{self.reward}")
             for layer in range(self.num_layers-1, -1, -1):
-                row = self.grid[layer]
+                row = grid[layer]
                 print(f"L{layer} | " + "".join(f"{int(x)}" for x in row))
 
     def close(self):
@@ -462,7 +468,7 @@ if __name__ == "__main__":
     def manual_testing():
         grid_step = 20
         wall = WallInstance(id=0, length_mm=3000, height_mm=1800, weight=300, grid_step=grid_step)
-        env = FBSBuilderEnv(wall_instance=wall, render_mode="terminal", max_steps=500)
+        env = FBSBuilderEnv(wall_instance=wall, render_mode="terminal_human", max_steps=500)
 
         obs, _ = env.reset()
         done = False
