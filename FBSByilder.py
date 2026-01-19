@@ -108,24 +108,26 @@ class FBSBuilderEnv(gym.Env):
 
         # Precompute block lengths in cells
         self.block_cells = [
-           bt.num_cells(self.wall_instance.grid_step) for bt in self.block_types 
+           bt.num_cells(self.wall_instance.grid_step) for bt in self.block_types
         ]
 
         # action: (index into block_types, start cell 0..num_cells-1 for place block)
         self.action_space = spaces.MultiDiscrete([self.n_types, self.num_cells])
 
         self.observation_space = spaces.Dict({
-            "grid": spaces.Box(low=0, 
-                               high=255, 
-                               shape=(self.num_layers, self.num_cells), 
-                               dtype=np.int16
-                            ),
+            "grid": spaces.Box(
+                low=0,
+                high=255,
+                shape=(self.num_layers, self.num_cells),
+                dtype=np.int16
+            ),
             "current_layer": spaces.Discrete(self.num_layers + 1),  # which layer is being filled next (0..num_layers)
-            "action_mask": spaces.Box(low=0, 
-                                      high=1, 
-                                      shape=(self.n_types, self.num_cells), 
-                                      dtype=np.int8
-                                    )
+            "action_mask": spaces.Box(
+                low=0,
+                high=1,
+                shape=(self.n_types, self.num_cells),
+                dtype=np.int8
+            )
         })
 
         self.reset()
@@ -146,23 +148,23 @@ class FBSBuilderEnv(gym.Env):
 
     def _check_bonding(self, layer: int, start: int, end: int) -> bool:
         """
-        Bonding rule: each block must have at least one-cell support 
+        Bonding rule: each block must have at least one-cell support
         overlap with blocks in the layer below.
         """
         if layer == 0:
             return True
-        
+
         below = self.grid[layer - 1, start:end]
 
         return np.any(below != 0)
 
-    def _vertical_suture_check(self, layer: int, start: int, end: int) -> int: 
+    def _vertical_suture_check(self, layer: int, start: int, end: int) -> int:
         """
         Checking the "vertical_suture(перевязку швов)" between the blocks
         """
         if layer == 0:
             return 0
-        
+
 
     # ========= Core penalty ============
     def _bonding_block_penalty(self, layer: int, heighth: int, step: int) -> int:
@@ -185,16 +187,16 @@ class FBSBuilderEnv(gym.Env):
         for s in seams_cur:
             d = np.min(np.abs(seams_below - s))
             if d < min_cells:
-                penalty += 5  
+                penalty += 5
 
         return penalty
-    
+
     def _big_mon_penalty(self, layer: int) -> int:
         """
         Checking for excessive monolithic sections (more than min(block_cells)).
         Total reward -50 for each similar plot
         """
-        current_layer = self.grid[layer]        
+        current_layer = self.grid[layer]
         reward = 0
         gaps = []
         i = 0
@@ -215,7 +217,7 @@ class FBSBuilderEnv(gym.Env):
             if g > min_block_cells:
                 reward += 100
         return reward
-    
+
     def _find_boundaries(self, row: np.ndarray) -> np.ndarray:
         bounds = []
         for i in range(len(row) - 1):
@@ -226,8 +228,8 @@ class FBSBuilderEnv(gym.Env):
     # =========- Action mask / legal actions =========-
     def compute_action_mask(self) -> np.ndarray:
         """
-        Return boolean mask shape (n_types, num_cells) 
-        where True means action(type_idx, start) is a priori legal 
+        Return boolean mask shape (n_types, num_cells)
+        where True means action(type_idx, start) is a priori legal
         (fits in bounds and does not intersect current layer occupied cells),
         AND satisfies bonding wrt layer below (if any).
         Note: we consider only current_layer for placement
@@ -247,7 +249,7 @@ class FBSBuilderEnv(gym.Env):
                 if not self._check_bonding(layer, s, s + b_cells):
                     continue
                 mask[t_idx, s] = 1
-                
+
         return mask
 
     # ========= Gym-base =========
@@ -259,14 +261,14 @@ class FBSBuilderEnv(gym.Env):
         self.instance_counter = 1
         self.instances = {}
 
-        self.current_layer_numb = 0  # Нужно помнить - рендер будет в обратную сторону 
+        self.current_layer_numb = 0  # Нужно помнить - рендер будет в обратную сторону
         self.step_count = 0
         self.reward = 0
 
         obs = self._get_obs()
 
         return obs, {}
-    
+
     def step(self, action: Tuple[int, int]):
         """
         action: (type_index, start_cell)
@@ -320,7 +322,7 @@ class FBSBuilderEnv(gym.Env):
         self.grid[layer, start:end] = instance_id
         self.grid_human[layer, start:end] = block_type_id
         # mark separator if not monolith
-  
+
         self.reward -= self._bonding_block_penalty(layer=layer,
                                                     heighth=600,
                                                     step=self.wall_instance.grid_step)
@@ -329,7 +331,7 @@ class FBSBuilderEnv(gym.Env):
         if np.all(self.grid[layer] != 0):
             # self.reward += 50.0
 
-            # penalties 
+            # penalties
             self.reward -= self._big_mon_penalty(layer)
             self.current_layer_numb += 1
 
@@ -361,13 +363,13 @@ class FBSBuilderEnv(gym.Env):
             "action_mask": mask
 }
         return obs
-    
+
     def get_action_mask(self):
         """
         Mask for MultiDiscrete([n_types, num_cells])
         Shape: (n_types + num_cells,)
         """
-        
+
         joint_mask = self.compute_action_mask()  # (n_types, num_cells)
 
         type_mask = np.any(joint_mask, axis=1).astype(np.int8)  # (n_types,)
@@ -375,7 +377,7 @@ class FBSBuilderEnv(gym.Env):
         start_mask = np.any(joint_mask, axis=0).astype(np.int8)  # (num_cells,)
 
         return np.concatenate([type_mask, start_mask])
-    
+
     def render(self):
         if "terminal" in self.render_mode:
             if "human" in self.render_mode:
@@ -428,7 +430,7 @@ if __name__ == "__main__":
 
     def mask_fn(env):
         return env.get_action_mask()
-        
+
     def model_train(model, env):
         env = ActionMasker(env, mask_fn)
 
@@ -493,7 +495,7 @@ if __name__ == "__main__":
 
         print("Total reward:", total_reward)
 
-        
+
     wall = WallInstance(id=0, length_mm=3000, height_mm=1800, weight=300, grid_step=grid_step)
     env = FBSBuilderEnv(wall_instance=wall, render_mode=None, max_steps=500)
     model = MaskablePPO(
@@ -509,7 +511,7 @@ if __name__ == "__main__":
             clip_range=0.2,
             tensorboard_log="./fbs_tensorboard/"
         )
-    
+
     #manual testing
     manual_testing()
     # Train
