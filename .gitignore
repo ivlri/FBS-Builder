@@ -1,4 +1,12 @@
 /__pycache__
-/.venv
+/.myvenv
 /tests
 /Versions
+/Save
+/fbs_tensorboard
+/myenv
+/.claude
+/CLAUDE.md
+/ppo_fbs_builder.zip
+/vec_normalize.pkl
+/bl.zip
