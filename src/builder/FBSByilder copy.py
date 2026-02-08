@@ -9,8 +9,8 @@ import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
 from gymnasium.envs.registration import register
+from stable_baselines3.common.callbacks import BaseCallback
 
-# === Block & Wall dataclasses / helpers ===
 
 @dataclass(frozen=True)
 class BlockType:
@@ -20,11 +20,9 @@ class BlockType:
     name: str
 
     def num_cells(self, grid_step: int) -> int:
-        """How many discrete grid cells the block occupies horizontally."""
         return self.length // grid_step
 
     def num_rows(self, row_height: int = 300) -> int:
-        """How many 300mm rows the block occupies vertically."""
         return self.height // row_height
 
 
@@ -59,17 +57,23 @@ class Opening:
 
 # === Default block types ===
 BLOCK_TYPES = [
+
+    # Monolith
     BlockType(id=0, length=20,   height=300, name="Монолит 300"),
-    BlockType(id=1, length=20,   height=600, name="Монолит 600"),
+
+    # FBS 600mm
     BlockType(id=2, length=2400, height=600, name="ФБС 24.6"),
     BlockType(id=3, length=1200, height=600, name="ФБС 12.6"),
-    BlockType(id=4, length=2400, height=300, name="ФБС 24.3"),
-    BlockType(id=5, length=1200, height=300, name="ФБС 12.3"),
+    BlockType(id=4, length=900,  height=600, name="ФБС 9.6"),
+
+    # FBS 300mm
+    BlockType(id=5, length=2400, height=300, name="ФБС 24.3"),
+    BlockType(id=6, length=1200, height=300, name="ФБС 12.3"),
+    BlockType(id=7, length=900,  height=300, name="ФБС 9.3")
+
 ]
 
-
-# Max distance (in cells) from opening where 300mm blocks are allowed
-MAX_HALF_PROXIMITY = 60  # 60 cells * 20mm = 1200mm
+MAX_HALF_PROX = 60 
 
 
 # === Environment ===
@@ -103,8 +107,8 @@ class FBSBuilderEnv(gym.Env):
             wall_instance: Конкретная стена для строительства. Если None, используется 
                 стена по умолчанию (3000x1800mm) или рандомизируется при randomize=True.
             
-            block_types: Список доступных типов блоков. Если None, используются 
-                стандартные блоки из BLOCK_TYPES (Монолит 300/600, ФБС 24.6/12.6/24.3/12.3).
+            block_types: Список доступных типов блоков. Если None, используются
+                стандартные блоки из BLOCK_TYPES (Монолит 300, ФБС 24/12/9 для обеих высот).
             
             render_mode: Режим отображения:
                 - None: без рендеринга
@@ -201,7 +205,7 @@ class FBSBuilderEnv(gym.Env):
         self.block_rows = [bt.num_rows() for bt in self.block_types]
 
         self.max_fbs_cells = max(
-            bt.num_cells(self.grid_step) for bt in self.block_types if bt.id not in (0, 1)
+            bt.num_cells(self.grid_step) for bt in self.block_types if bt.id != 0
         )
 
         #Current wall dimensions (overwritten in reset when randomize=True)
@@ -657,8 +661,8 @@ class FBSBuilderEnv(gym.Env):
 
         near_opening = np.zeros(self.num_cells, dtype=bool)
         for bp in blocked_positions:
-            left = max(0, bp - MAX_HALF_PROXIMITY)
-            right = min(self.num_cells, bp + MAX_HALF_PROXIMITY + 1)
+            left = max(0, bp - MAX_HALF_PROX)
+            right = min(self.num_cells, bp + MAX_HALF_PROX + 1)
             near_opening[left:right] = True
 
         return near_opening
@@ -682,7 +686,7 @@ class FBSBuilderEnv(gym.Env):
         fbs_can_fit = np.zeros(self.num_cells, dtype=bool)
 
         edge_gap_blocked = []
-        for t_idx in range(1, self.n_types):
+        for t_idx in range(2, self.n_types):  # Skip monolith types (0, 1)
             bt = self.block_types[t_idx]
             b_cells = self.block_cells[t_idx]
             h_rows = self.block_rows[t_idx]
@@ -729,18 +733,21 @@ class FBSBuilderEnv(gym.Env):
                 mask[action_idx] = 1
                 fbs_can_fit[s:e] = True
 
-        # Monolith — only where no FBS fits, ban positions 0 and num_cells-1
-        t_idx = 0
-        b_cells = self.block_cells[t_idx]  # = 1
-        h_rows = self.block_rows[t_idx]    # = 1
-        for s in range(self.num_cells):
-            if self._intersects(row, s, s + b_cells, h_rows):
-                continue
-            if not self._check_bonding(row, s, s + b_cells):
-                continue
-            if not self._is_on_frontier(row, s, s + b_cells):
-                continue
-            if not fbs_can_fit[s]:
+        # Monolith (300mm only) — only where no FBS fits, ban positions 0 and num_cells-1
+        for t_idx in [0]:  # Only Monolith 300
+            b_cells = self.block_cells[t_idx]  # = 1
+            h_rows = self.block_rows[t_idx]    # 1 for 300mm
+            for s in range(self.num_cells):
+                if self._intersects(row, s, s + b_cells, h_rows):
+                    continue
+                if not self._check_bonding(row, s, s + b_cells):
+                    continue
+                if not self._is_on_frontier(row, s, s + b_cells):
+                    continue
+                # Only allow monolith where no FBS can cover this cell
+                if fbs_can_fit[s]:
+                    continue
+                # Ban positions 0 and num_cells-1 (edges should have FBS)
                 if s == 0 or s == self.num_cells - 1:
                     continue
                 action_idx = t_idx * self.max_cells + s
@@ -748,17 +755,20 @@ class FBSBuilderEnv(gym.Env):
 
         # Safety valve: if mask is completely empty, re-allow monolith at edges
         if not np.any(mask):
-            for s in [0, self.num_cells - 1]:
-                if s >= self.num_cells:
-                    continue
-                if self._intersects(row, s, s + 1, 1):
-                    continue
-                if not self._check_bonding(row, s, s + 1):
-                    continue
-                if not self._is_on_frontier(row, s, s + 1):
-                    continue
-                action_idx = 0 * self.max_cells + s
-                mask[action_idx] = 1
+            for t_idx in [0]:  # Try monolith
+                b_cells = self.block_cells[t_idx]
+                h_rows = self.block_rows[t_idx]
+                for s in [0, self.num_cells - 1]:
+                    if s >= self.num_cells:
+                        continue
+                    if self._intersects(row, s, s + b_cells, h_rows):
+                        continue
+                    if not self._check_bonding(row, s, s + b_cells):
+                        continue
+                    if not self._is_on_frontier(row, s, s + b_cells):
+                        continue
+                    action_idx = t_idx * self.max_cells + s
+                    mask[action_idx] = 1
 
         # COPY_LAYER meta-action
         if self._can_copy_layer(row):
@@ -916,6 +926,11 @@ class FBSBuilderEnv(gym.Env):
         info["copy_layer"] = True
         info["fbs_blocks_copied"] = fbs_block_count
 
+        # Save terminal state before potential auto-reset by VecEnv wrapper
+        if terminated or truncated:
+            info["terminal_grid"] = self.grid_human.copy()
+            info["terminal_instances"] = dict(self.inst)
+
         return self._get_obs(), step_reward, terminated, truncated, info
 
     def _advance_row(self):
@@ -1050,7 +1065,7 @@ class FBSBuilderEnv(gym.Env):
 
         #--------- REWARD SHAPING ---------
         # 1. Block size reward
-        if block_type_id not in (0, 1):
+        if block_type_id != 0:
             size_ratio = b_cells / self.max_fbs_cells
             block_reward = 5.0 + 15.0 * size_ratio
             step_reward += block_reward
@@ -1126,6 +1141,11 @@ class FBSBuilderEnv(gym.Env):
         self.total_reward += step_reward
         info["total_reward"] = self.total_reward
 
+        # Save terminal state before potential auto-reset by VecEnv wrapper
+        if terminated or truncated:
+            info["terminal_grid"] = self.grid_human.copy()
+            info["terminal_instances"] = dict(self.inst)
+
         return self._get_obs(), step_reward, terminated, truncated, info
 
     def _get_obs(self) -> Dict[str, Any]:
@@ -1184,8 +1204,6 @@ class FBSBuilderEnv(gym.Env):
 
 
 #--------- Callbacks---------
-from stable_baselines3.common.callbacks import BaseCallback
-
 class EpisodeRewardCallback(BaseCallback):
     def __init__(self, verbose=0):
         super().__init__(verbose)
@@ -1201,7 +1219,6 @@ class EpisodeRewardCallback(BaseCallback):
                 if self.verbose > 0:
                     print(f"Episode {len(self.episode_rewards)}: reward={info['episode']['r']:.1f}, length={info['episode']['l']}")
         return True
-
 
 #--------- Training / Validation---------
 if __name__ == "__main__":
@@ -1255,8 +1272,8 @@ if __name__ == "__main__":
         )
         return vec_env
 
-    def model_train(total_timesteps=200_000, use_vec_normalize=True):
-        if use_vec_normalize:
+    def model_train(total_timesteps=200_000, vec_normalize=True):
+        if vec_normalize:
             env = make_vec_env(n_envs=4)
         else:
             env = make_env()
@@ -1282,10 +1299,10 @@ if __name__ == "__main__":
 
         callback = EpisodeRewardCallback(verbose=1)
         model.learn(callback=callback, total_timesteps=total_timesteps)
-        model.save("ppo_fbs_builder")
+        model.save("src/builder/data/ppo_fbs_builder")
 
-        if use_vec_normalize:
-            env.save("vec_normalize.pkl")
+        if vec_normalize:
+            env.save("src/builder/data/vec_normalize.pkl")
 
         if callback.episode_rewards:
             plt.figure(figsize=(12, 4))
@@ -1305,12 +1322,12 @@ if __name__ == "__main__":
             plt.grid()
 
             plt.tight_layout()
-            plt.savefig("training_progress.png")
+            plt.savefig("data/training_progress.png")
             plt.show()
 
         return model
 
-    def validation(model_path="ppo_fbs_builder"):
+    def validation(model_path="src/builder/data/ppo_fbs_builder"):
         wall = WallInstance(id=0, length=3000, height=1800, weight=300, grid_step=grid_step)
         env = FBSBuilderEnv(
             wall_instance=wall,
