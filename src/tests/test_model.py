@@ -3,7 +3,7 @@ import os
 from sb3_contrib import MaskablePPO
 from sb3_contrib.common.wrappers import ActionMasker
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
-from builder.FBSBuilder import FBSBuilderEnv, WallInstance, Opening, BLOCK_TYPES
+from builder.fbs_builder import FBSBuilderEnv, WallInstance, Opening, BLOCK_TYPES
 from src.builder.structures import WallInstance, Opening, GRID_STEP
 
 def mask_fn(env):

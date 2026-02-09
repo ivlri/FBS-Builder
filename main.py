@@ -1,6 +1,6 @@
 #--------- Training / Validation---------
 if __name__ == "__main__":
-    from builder.FBSBuilder import FBSBuilderEnv, EpisodeRewardCallback
+    from builder.fbs_builder import FBSBuilderEnv, EpisodeRewardCallback
     from src.builder.structures import  WallInstance
 
     from sb3_contrib import MaskablePPO

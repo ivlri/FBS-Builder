@@ -229,7 +229,7 @@ class FBSBuilderEnv(gym.Env):
             ),
         })
 
-        self.reset()
+        # self.reset()
 
     #========================================
     #Core of the learning
@@ -936,7 +936,22 @@ class FBSBuilderEnv(gym.Env):
 
         # --- ContextBuilder override ---
         if self.context_builder is not None and self.context_data is not None:
-            context_mask = self.context_builder.build_grid(**self.context_data)
+            context_mask = self.context_builder.build_grid(
+                walls=self.context_data["walls"],
+                current_idx=self.context_data["current_idx"],
+                num_rows=self.num_rows,
+                num_cells=self.num_cells,
+            )
+
+            print('\n\n`````````````Start``````````````')
+            print(f"Context mask: {context_mask.shape}")
+            for layer_idx, layer in enumerate(context_mask):
+                print(f"L{layer_idx}| {''.join(map(str, layer))}")
+            print('-------')
+            print("Env grid:", self.grid.shape)
+            for layer_idx, layer in enumerate(self.grid):
+                print(f"L{layer_idx}| {''.join(map(str, layer))}")
+            print('\n\n')
 
             # blocked_mask - only within the limits of num_rows / num_cells
             self.blocked_mask[:self.num_rows, :self.num_cells] = context_mask
@@ -944,6 +959,10 @@ class FBSBuilderEnv(gym.Env):
             # we mark tke blocked zones as -1
             self.grid[:self.num_rows, :self.num_cells][context_mask == 1] = -1
             self.grid_human[:self.num_rows, :self.num_cells][context_mask == 1] = 1
+
+            print("Grid after change:")
+            for layer_idx, layer in enumerate(self.grid):
+                print(f"L{layer_idx}| {''.join(map(str, layer))}")
 
         self.inst_counter = 1
         self.inst = {}
@@ -1124,7 +1143,7 @@ class FBSBuilderEnv(gym.Env):
         if terminated or truncated:
             info["terminal_grid"] = self.grid_human.copy()
             info["terminal_instances"] = dict(self.inst)
-
+ 
         return self._get_obs(), step_reward, terminated, truncated, info
 
     def _get_obs(self) -> Dict[str, Any]:

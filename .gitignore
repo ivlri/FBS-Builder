@@ -1,5 +1,6 @@
 /__pycache__
 /.myvenv
+/.venv
 /tests
 /Versions
 /Save

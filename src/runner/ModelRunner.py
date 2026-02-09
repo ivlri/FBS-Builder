@@ -6,7 +6,7 @@ from sb3_contrib import MaskablePPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from sb3_contrib.common.wrappers import ActionMasker
 
-from src.builder.FBSBuilder import FBSBuilderEnv
+from builder.fbs_builder import FBSBuilderEnv
 from src.builder.structures import WallInstance, Opening,  GRID_STEP
 
 from src.contextbuilder.contextbuilder import ContextBuilder
