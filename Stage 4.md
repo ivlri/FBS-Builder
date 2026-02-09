@@ -38,3 +38,8 @@
             левый торец - стоит ограничение 300 мм от конца стены (перевязка в торце)
 
     когда next станет current и будут ограничения с двух сторон они начнут чередоваться
+
+Что-то я запутался с падином, поэтому не получилось применить context_mask
+        self.grid = np.zeros((self.max_rows, self.max_cells), dtype=np.int32)
+        self.grid_human = np.zeros((self.max_rows, self.max_cells), dtype=np.int32)
+        self.blocked_mask = np.zeros((self.max_rows, self.max_cells), dtype=np.int8)
