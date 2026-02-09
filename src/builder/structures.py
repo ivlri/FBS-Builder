@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import numpy as np
 
 GRID_STEP = 20
 
@@ -23,6 +24,7 @@ class WallInstance:
     height: int
     weight: int
     grid_step: int
+    grid_instance: np.ndarray = None
 
     @property
     def num_cells(self) -> int:

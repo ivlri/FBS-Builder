@@ -9,6 +9,9 @@ from sb3_contrib.common.wrappers import ActionMasker
 from src.builder.FBSBuilder import FBSBuilderEnv
 from src.builder.structures import WallInstance, Opening,  GRID_STEP
 
+from src.contextbuilder.contextbuilder import ContextBuilder
+
+
 class ModelRunner:
     def __init__(
         self,
@@ -52,10 +55,18 @@ class ModelRunner:
         if self.model is None:
             self.model = MaskablePPO.load(self.model_path)
 
-    def _make_env(self, wall: Optional[WallInstance], openings=None):
+    def _make_env(
+            self, 
+            wall: WallInstance, 
+            openings: Optional[Opening] = None,
+            context_builder: Optional[ContextBuilder] = None,
+            context_data: dict = None,
+    ):
         def make_env():
             env = FBSBuilderEnv(
                 wall_instance=wall,
+                context_builder=context_builder,
+                context_data=context_data,
                 openings=openings,
                 render_mode=None,
                 max_steps=self.max_steps,
@@ -94,11 +105,17 @@ class ModelRunner:
 
         return vec_env
     
-    def run(self, wall: Optional[WallInstance], openings: Optional[Opening]=None):
+    def run(
+            self, 
+            wall: Optional[WallInstance], 
+            openings: Optional[Opening]=None, 
+            context_builder: Optional[ContextBuilder] = None,
+            context_data: dict = None,
+    ):
         """Single run inference episode"""
 
         self._load_model()
-        vec_env = self._make_env(wall, openings)
+        vec_env = self._make_env(wall, openings, context_builder, context_data)
 
         obs = vec_env.reset()
         done = False

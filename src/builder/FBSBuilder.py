@@ -2,7 +2,7 @@
 # Stage 3: Single wall with openings (blocked zones)
 # Grid resolution: 300mm rows (600mm blocks span 2 rows, 300mm blocks span 1 row)
 import math
-from typing import List, Tuple, Dict, Any, Set
+from typing import List, Tuple, Dict, Any, Set, Optional
 
 import numpy as np
 import gymnasium as gym
@@ -10,6 +10,7 @@ from gymnasium import spaces
 from gymnasium.envs.registration import register
 from stable_baselines3.common.callbacks import BaseCallback
 from .structures import BlockType, WallInstance, Opening
+from src.contextbuilder.contextbuilder import ContextBuilder
 
 
 # === Default block types ===
@@ -47,6 +48,9 @@ class FBSBuilderEnv(gym.Env):
     def __init__(
         self,
         wall_instance: WallInstance = None,
+        context_builder: Optional[ContextBuilder] = None,
+        context_data: dict = None,
+
         block_types: List[BlockType] = None,
         render_mode: str = None,
         max_steps: int = 1000,
@@ -153,6 +157,8 @@ class FBSBuilderEnv(gym.Env):
         self.min_height = min_height
         self.max_height = max_height
 
+        self.context_builder = context_builder
+        self.context_data = context_data
         #Max dimensions define observation/action space sizes (padding target)
         self.max_cells = max_length // grid_step
         self.max_rows = max_height // 300
@@ -915,6 +921,7 @@ class FBSBuilderEnv(gym.Env):
 
             min_rows = self.min_height // 300
             max_rows = self.max_height // 300
+
             # Ensure even number of rows (walls are multiples of 600mm)
             min_rows = max(min_rows, 2)
             raw_rows = int(self.np_random.integers(min_rows // 2, max_rows // 2 + 1))
@@ -922,9 +929,21 @@ class FBSBuilderEnv(gym.Env):
 
         self.num_layers = self.num_rows // 2
 
+        # Base matrix is zeros
         self.grid = np.zeros((self.max_rows, self.max_cells), dtype=np.int32)
         self.grid_human = np.zeros((self.max_rows, self.max_cells), dtype=np.int32)
         self.blocked_mask = np.zeros((self.max_rows, self.max_cells), dtype=np.int8)
+
+        # --- ContextBuilder override ---
+        if self.context_builder is not None and self.context_data is not None:
+            context_mask = self.context_builder.build_grid(**self.context_data)
+
+            # blocked_mask - only within the limits of num_rows / num_cells
+            self.blocked_mask[:self.num_rows, :self.num_cells] = context_mask
+
+            # we mark tke blocked zones as -1
+            self.grid[:self.num_rows, :self.num_cells][context_mask == 1] = -1
+            self.grid_human[:self.num_rows, :self.num_cells][context_mask == 1] = 1
 
         self.inst_counter = 1
         self.inst = {}
@@ -934,9 +953,10 @@ class FBSBuilderEnv(gym.Env):
         self.step_count = 0
         self.total_reward = 0.0
 
-        # Apply openings
+        # Apply openings/randomize/instance restrictions
         if self.openings is not None:
             self._apply_openings(self.openings)
+
         elif self.randomize:
             rand_ops = self._gen_random_openings()
 
