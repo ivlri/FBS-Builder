@@ -1,6 +1,6 @@
 #--------- Training / Validation---------
 if __name__ == "__main__":
-    from src.builder.FBSByilder import FBSBuilderEnv, EpisodeRewardCallback
+    from builder.FBSBuilder import FBSBuilderEnv, EpisodeRewardCallback
     from src.builder.structures import  WallInstance
 
     from sb3_contrib import MaskablePPO
@@ -11,6 +11,7 @@ if __name__ == "__main__":
     from stable_baselines3.common.vec_env import VecNormalize
     import matplotlib.pyplot as plt
     import numpy as np
+    import argparse
 
     grid_step = 20
 
@@ -177,8 +178,13 @@ if __name__ == "__main__":
             print(f"Total reward: {env.total_reward:.1f}")
 
     #Main 
-    print("Starting Stage 3 training (openings + randomization)...")
-    model = model_train(total_timesteps=200000)
+    parser = argparse.ArgumentParser(description="Train model")
+    parser.add_argument("--mode", '-m',default='v', help="start mode (t or v)")
+    args = parser.parse_args()
 
-    print("\nStarting validation...")
-    validation()
+    if args.mode == 'v':
+        print("\nStarting validation...")
+        validation()
+    else:
+        print("Starting training (openings + randomization)...")
+        model = model_train(total_timesteps=200000)

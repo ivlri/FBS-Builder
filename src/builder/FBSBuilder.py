@@ -693,7 +693,7 @@ class FBSBuilderEnv(gym.Env):
                 fbs_can_fit[s:e] = True
 
         # Monolith (300mm only) — only where no FBS fits, ban positions 0 and num_cells-1
-        for t_idx in [0]:  # Only Monolith 300
+        for t_idx in [0]:
             b_cells = self.block_cells[t_idx]  # = 1
             h_rows = self.block_rows[t_idx]    # 1 for 300mm
             for s in range(self.num_cells):

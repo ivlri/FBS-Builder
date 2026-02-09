@@ -1,0 +1,11 @@
+{
+    1: {"type_id": 3, "row": 0, "start": 0,   "end": 60,  "h_rows": 2},
+    2: {"type_id": 4, "row": 0, "start": 60,  "end": 105, "h_rows": 2},
+    3: {"type_id": 4, "row": 0, "start": 105, "end": 150, "h_rows": 2},
+    5: {"type_id": 4, "row": 2, "start": 0,   "end": 45,  "h_rows": 2},
+    6: {"type_id": 4, "row": 2, "start": 45,  "end": 90,  "h_rows": 2},
+    4: {"type_id": 3, "row": 2, "start": 90,  "end": 150, "h_rows": 2},
+    8: {"type_id": 3, "row": 4, "start": 0,   "end": 60,  "h_rows": 2},
+    9: {"type_id": 4, "row": 4, "start": 60,  "end": 105, "h_rows": 2}
+    7: {"type_id": 4, "row": 4, "start": 105, "end": 150, "h_rows": 2},
+}

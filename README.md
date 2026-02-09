@@ -251,19 +251,6 @@ python test_model.py --wall medium
 - Стены С проемами: FBS ≥ 70%
 - `reason == "all_rows_completed"`
 
-### 7.4 Диагностика
-
-```bash
-# Анализ логов TensorBoard
-python analyze_logs.py
-
-# Диагностика action mask (если доступно)
-python debug_mask.py
-
-# Анализ policy распределения (если доступно)
-python debug_policy.py
-```
-
 ---
 
 ## 8. Открытые вопросы

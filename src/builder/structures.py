@@ -1,5 +1,7 @@
 from dataclasses import dataclass
 
+GRID_STEP = 20
+
 @dataclass(frozen=True)
 class BlockType:
     id: int

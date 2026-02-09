@@ -3,8 +3,8 @@ import os
 from sb3_contrib import MaskablePPO
 from sb3_contrib.common.wrappers import ActionMasker
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
-from src.builder.FBSByilder import FBSBuilderEnv, WallInstance, Opening, BLOCK_TYPES
-
+from builder.FBSBuilder import FBSBuilderEnv, WallInstance, Opening, BLOCK_TYPES
+from src.builder.structures import WallInstance, Opening, GRID_STEP
 
 def mask_fn(env):
     """Extract action mask from potentially wrapped env."""
@@ -15,7 +15,6 @@ def mask_fn(env):
     return env.get_action_mask()
 
 # Must match training parameters!
-GRID_STEP = 20
 MIN_LENGTH = 1200
 MAX_LENGTH = 6000
 MIN_HEIGHT = 1200
