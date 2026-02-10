@@ -96,9 +96,10 @@ def format_layers(instances: Dict[str, Dict], grid_step: int = 20) -> Dict[str, 
         "text": "\n".join(lines),
         "layers": layers_output
     }
+
 walls = [
     WallInstance(id=1, length=3000, height=1800, weight=300, grid_step=GRID_STEP),
-    WallInstance(id=1, length=3000, height=1800, weight=200, grid_step=GRID_STEP),
+    WallInstance(id=1, length=3000, height=1800, weight=300, grid_step=GRID_STEP),
     WallInstance(id=2, length=3000, height=1800, weight=300, grid_step=GRID_STEP)
 ]
 
@@ -107,7 +108,7 @@ runner = ModelRunner(model_path="src/builder/data/ppo_fbs_builder")
 
 
 for i, wall in enumerate(walls):
-    # grid = context.build_grid(walls, i)
+    # grid = context.build_grid(walls, i, 3, 150)
     # for layer_idx, layer in enumerate(grid):
     #     print(f"L{layer_idx}| {''.join(map(str, layer))}")
     # print('----------------')
