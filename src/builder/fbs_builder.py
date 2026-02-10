@@ -947,15 +947,15 @@ class FBSBuilderEnv(gym.Env):
                 num_cells=self.num_cells,
             )
 
-            print('\n\n`````````````Start``````````````')
-            print(f"Context mask: {context_mask.shape}")
-            for layer_idx, layer in enumerate(context_mask):
-                print(f"L{layer_idx}| {''.join(map(str, layer))}")
-            print('-------')
-            print("Env grid:", self.grid.shape)
-            for layer_idx, layer in enumerate(self.grid):
-                print(f"L{layer_idx}| {''.join(map(str, layer))}")
-            print('\n\n')
+            # print('\n\n`````````````Start``````````````')
+            # print(f"Context mask: {context_mask.shape}")
+            # for layer_idx, layer in enumerate(context_mask):
+            #     print(f"L{layer_idx}| {''.join(map(str, layer))}")
+            # print('-------')
+            # print("Env grid:", self.grid.shape)
+            # for layer_idx, layer in enumerate(self.grid):
+            #     print(f"L{layer_idx}| {''.join(map(str, layer))}")
+            # print('\n\n')
 
             # blocked_mask - only within the limits of num_rows / num_cells
             self.blocked_mask[:self.num_rows, :self.num_cells] = context_mask
@@ -964,9 +964,9 @@ class FBSBuilderEnv(gym.Env):
             self.grid[:self.num_rows, :self.num_cells][context_mask == 1] = -1
             self.grid_human[:self.num_rows, :self.num_cells][context_mask == 1] = 1
 
-            print("Grid after change:")
-            for layer_idx, layer in enumerate(self.grid):
-                print(f"L{layer_idx}| {''.join(map(str, layer))}")
+            # print("Grid after change:")
+            # for layer_idx, layer in enumerate(self.grid):
+            #     print(f"L{layer_idx}| {''.join(map(str, layer))}")
 
         self.inst_counter = 1
         self.inst = {}
