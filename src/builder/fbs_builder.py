@@ -202,6 +202,7 @@ class FBSBuilderEnv(gym.Env):
 
         self.openings = openings
         self.blocked_mask = None
+        self.has_openings = False
 
         self.n_actions = self.n_types * self.max_cells
 
@@ -368,6 +369,7 @@ class FBSBuilderEnv(gym.Env):
         internal_seams_below = seams_below[
             (seams_below >= min_cells) & (seams_below <= self.num_cells - min_cells)
         ]
+
         if len(internal_seams_below) == 0:
             return 0.0
 
@@ -531,6 +533,8 @@ class FBSBuilderEnv(gym.Env):
     #========================================
     def _apply_openings(self, openings: List[Opening]):
         """Mark opening zones as blocked in grid and blocked_mask (300mm row resolution)"""
+        if openings:
+            self.has_openings = True
         for op in openings:
             half_w = op.width // 2
             half_h = op.height // 2
@@ -646,7 +650,7 @@ class FBSBuilderEnv(gym.Env):
 
         # Precompute proximity mask for 300mm blocks
         proximity = self._opening_proximity_mask(row)
-        has_any_opening = np.any(self.blocked_mask[:self.num_rows, :self.num_cells] == 1)
+        has_any_opening = self.has_openings
 
         fbs_can_fit = np.zeros(self.num_cells, dtype=bool)
 
@@ -971,6 +975,7 @@ class FBSBuilderEnv(gym.Env):
         self.current_row = 0
         self.step_count = 0
         self.total_reward = 0.0
+        self.has_openings = False
 
         # Apply openings/randomize/instance restrictions
         if self.openings is not None:

@@ -13,33 +13,63 @@
 
 # Этап 4
 
-Нужно реализовать Context Builder тестово на основе двух стен. 
-Для этого понадобиться пересмотреть создание сетки в FBSBuilder, так как сейчас сетка формируется заполненная нулями в reset(), а нужно что бы сетку формировал Context Builder и передавал в FBSBuilder.
+## Цель
 
-Примерный пайплайн такой - we have a list of walls (completed, current, next)
-1. completed или next стены может не быть— в этом случае мы считаем, что начальные или конечные 300 мм не имеют ограничений.
-2. Есть completed или next стены есть, то на начальные или конечные 300 мм накладываются ограничения (на примере current -> next слева на право): 
-    current:
-        левый открытый торец => ограничений нет
-        - первый слой:
-            правый торец - ограничений нет
-        - второй слой:
-            правый торец - стоит ограничение 300 мм от конца стены (перевязка в торце)
-        - Третий слой:
-            правый торец - ограничений нет
-            
-    next
-        правый открытый торец => ограничений нет
-        - первый слой:
-            левый торец - стоит ограничение 300 мм от конца стены (перевязка в торце)
-        - второй слой:
-            левый торец - ограничений нет
-        - Третий слой:
-            левый торец - стоит ограничение 300 мм от конца стены (перевязка в торце)
+Реализовать Context Builder для перевязки смежных стен (chess-pattern bonding).
 
-    когда next станет current и будут ограничения с двух сторон они начнут чередоваться
+## Изменения в архитектуре
 
-Что-то я запутался с падином, поэтому не получилось применить context_mask
-        self.grid = np.zeros((self.max_rows, self.max_cells), dtype=np.int32)
-        self.grid_human = np.zeros((self.max_rows, self.max_cells), dtype=np.int32)
-        self.blocked_mask = np.zeros((self.max_rows, self.max_cells), dtype=np.int8)
+**Было:** `FBSBuilder.reset()` создаёт пустую сетку `np.zeros()`
+
+**Стало:** `ContextBuilder.build_grid()` создаёт сетку с предзаполненными ограничениями → передаёт в `FBSBuilder`
+
+## Правила перевязки торцов
+
+Входные данные: `walls[]`, `current_idx`
+- `completed_wall` = walls[current_idx - 1] (если есть)
+- `next_wall` = walls[current_idx + 1] (если есть)
+
+### Паттерн ограничений
+
+Ограничения чередуются по 600мм-слоям (layer = row // 2):
+
+| Layer | Left (from completed) | Right (towards next) |
+|-------|----------------------|---------------------|
+| 0     | BLOCKED              | free                |
+| 1     | free                 | BLOCKED             |
+| 2     | BLOCKED              | free                |
+| 3     | free                 | BLOCKED             |
+
+**Логика в коде** (`contextbuilder.py:44,54`):
+```python
+# Left end: block when layer % 2 == 0
+if block % 2 != 1:  # layers 0, 2, 4...
+    grid[layer, :cells] = 1
+
+# Right end: block when layer % 2 == 1
+if block % 2 == 1:  # layers 1, 3, 5...
+    grid[layer, -cells:] = 1
+```
+
+### Пример: 3 стены подряд
+
+```
+Wall 0 (первая):    [.........|FREE]  — нет completed, нечего блокировать слева
+Wall 1 (средняя):   [BLOCKED..|..BLOCKED]  — ограничения с обеих сторон (чередуются)
+Wall 2 (последняя): [BLOCKED..|FREE]  — нет next, нечего блокировать справа
+```
+
+### Ширина ограничения
+
+Ширина блокируемой зоны = `wall.weight` (толщина примыкающей стены):
+- 300mm wall → 15 cells @ 20mm grid
+- 200mm wall → 10 cells @ 20mm grid
+
+## Статус реализации
+
+- [x] `ContextBuilder.build_grid()` — создание сетки с ограничениями
+- [x] `ContextBuilder._apply_end_restrictions()` — логика перевязки
+- [x] `ModelRunner.run()` — интеграция с context_builder
+- [x] `context_test.py` — тесты на 3 стенах
+
+
