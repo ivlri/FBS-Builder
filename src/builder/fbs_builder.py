@@ -945,6 +945,7 @@ class FBSBuilderEnv(gym.Env):
                 current_idx=self.context_data["current_idx"],
                 num_rows=self.num_rows,
                 num_cells=self.num_cells,
+                context_data=self.context_data,
             )
 
             # print('\n\n`````````````Start``````````````')
