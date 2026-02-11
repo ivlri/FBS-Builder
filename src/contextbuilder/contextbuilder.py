@@ -86,6 +86,8 @@ class ContextBuilder:
         right_wall: Optional[WallInstance],
         bonding_left: Optional[int],
         bonding_right: Optional[int],
+        left_occupied: Optional[np.ndarray] = None,
+        right_occupied: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """
         Build constraint grid with explicit bonding types.
@@ -97,6 +99,8 @@ class ContextBuilder:
             right_wall: Adjacent wall on right (for thickness), None if no neighbor
             bonding_left: 0 or 1, None if no left neighbor
             bonding_right: 0 or 1, None if no right neighbor
+            left_occupied: Occupied cells from left neighbor (prevents overlap)
+            right_occupied: Occupied cells from right neighbor (prevents overlap)
         """
         num_rows = wall.num_rows
         num_cells = wall.num_cells
@@ -108,10 +112,43 @@ class ContextBuilder:
             left_wall,
             right_wall,
             bonding_left,
-            bonding_right
+            bonding_right,
+            left_occupied,
+            right_occupied,
         )
 
         return grid
+
+    def extract_edge_occupied(
+        self,
+        grid: np.ndarray,
+        side: str,
+        width_cells: int,
+    ) -> np.ndarray:
+        """
+        Extract occupied cells from wall edge for passing to neighbor wall.
+
+        Args:
+            grid: Wall grid (num_rows, num_cells), values > 0 = occupied
+            side: 'left' or 'right'
+            width_cells: Width of edge zone in cells (neighbor wall thickness)
+
+        Returns:
+            np.ndarray (num_rows, width_cells) with 1 = occupied, 0 = free
+        """
+        num_rows = grid.shape[0]
+        result = np.zeros((num_rows, width_cells), dtype=np.uint8)
+
+        if side == 'right':
+            # Take last width_cells columns
+            edge = grid[:, -width_cells:]
+            result[:, :edge.shape[1]] = (edge > 0).astype(np.uint8)
+        elif side == 'left':
+            # Take first width_cells columns
+            edge = grid[:, :width_cells]
+            result[:, :edge.shape[1]] = (edge > 0).astype(np.uint8)
+
+        return result
 
     def _apply_end_restrictions(
             self,
@@ -120,6 +157,8 @@ class ContextBuilder:
             next_wall: Optional[WallInstance],
             bonding_left: Optional[int] = None,
             bonding_right: Optional[int] = None,
+            left_occupied: Optional[np.ndarray] = None,
+            right_occupied: Optional[np.ndarray] = None,
     ) -> np.ndarray:
         """
         Apply chess-pattern restrictions at wall joints.
@@ -130,6 +169,8 @@ class ContextBuilder:
             next_wall: Right neighbor (for thickness)
             bonding_left: 0 = block even layers, 1 = block odd layers
             bonding_right: 0 = block even layers, 1 = block odd layers
+            left_occupied: Occupied cells from left neighbor's right edge (blocks overlap prevention)
+            right_occupied: Occupied cells from right neighbor's left edge (blocks overlap prevention)
         """
 
         # Left end (from completed wall)
@@ -144,6 +185,15 @@ class ContextBuilder:
                 if block % 2 == bonding_left:
                     grid[layer, :cells_comp] = 1
 
+        # Block cells occupied by left neighbor (prevents block overlap)
+        if left_occupied is not None:
+            overlap_rows = min(grid.shape[0], left_occupied.shape[0])
+            overlap_cols = min(grid.shape[1], left_occupied.shape[1])
+            for row in range(overlap_rows):
+                for col in range(overlap_cols):
+                    if left_occupied[row, col] > 0:
+                        grid[row, col] = 1
+
         # Right end (towards the next wall)
         if next_wall and bonding_right is not None:
             r_width_next = next_wall.weight
@@ -153,5 +203,14 @@ class ContextBuilder:
                 block = layer // 2
                 if block % 2 == bonding_right:
                     grid[layer, -cells_next:] = 1
+
+        # Block cells occupied by right neighbor (prevents block overlap)
+        if right_occupied is not None:
+            overlap_rows = min(grid.shape[0], right_occupied.shape[0])
+            overlap_cols = min(grid.shape[1], right_occupied.shape[1])
+            for row in range(overlap_rows):
+                for col in range(overlap_cols):
+                    if right_occupied[row, col] > 0:
+                        grid[row, -(overlap_cols - col)] = 1
 
         return grid

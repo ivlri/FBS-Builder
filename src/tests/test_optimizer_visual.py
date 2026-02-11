@@ -1,6 +1,6 @@
 from typing import List, Dict, Any
 from collections import defaultdict
-
+import numpy as np
 from src.builder.structures import WallInstance, GRID_STEP
 from src.builder.fbs_builder import BLOCK_TYPES
 from src.contextbuilder.contextbuilder import ContextBuilder
@@ -164,6 +164,56 @@ def print_wall_result(wall_id: int, wall: WallInstance, instances: Dict, reward:
     print(f"    Monolith: {stats['monolith_mm']}mm ({stats['monolith_percent']:.1f}%)")
 
 
+def check_overlap(
+    wall1_grid: np.ndarray,
+    wall2_grid: np.ndarray,
+    wall1_weight: int,
+    wall2_weight: int,
+    grid_step: int = 20,
+) -> Dict:
+    """
+    Check if blocks from adjacent walls overlap at their joint.
+
+    Args:
+        wall1_grid: Grid from wall 1 (left wall)
+        wall2_grid: Grid from wall 2 (right wall)
+        wall1_weight: Thickness of wall 1 in mm
+        wall2_weight: Thickness of wall 2 in mm
+        grid_step: Grid step in mm
+
+    Returns:
+        Dict with overlap info: {"has_overlap": bool, "overlap_cells": list}
+    """
+
+    if wall1_grid is None or wall2_grid is None:
+        return {"has_overlap": False, "overlap_cells": [], "error": "Missing grid"}
+
+    # Wall 1's right edge overlaps with wall 2's left edge
+    wall2_width_cells = wall2_weight // grid_step
+    wall1_width_cells = wall1_weight // grid_step
+
+    # Check minimum rows
+    min_rows = min(wall1_grid.shape[0], wall2_grid.shape[0])
+
+    overlap_cells = []
+
+    for row in range(min_rows):
+        # Wall 1: check last wall2_width_cells columns
+        wall1_right = wall1_grid[row, -wall2_width_cells:]
+        # Wall 2: check first wall1_width_cells columns
+        wall2_left = wall2_grid[row, :wall1_width_cells]
+
+        # Both occupied = overlap
+        for col in range(min(len(wall1_right), len(wall2_left))):
+            if wall1_right[col] > 0 and wall2_left[col] > 0:
+                overlap_cells.append({"row": row, "col": col})
+
+    return {
+        "has_overlap": len(overlap_cells) > 0,
+        "overlap_cells": overlap_cells,
+    }
+
+
 def compute_stats(instances: Dict, num_cells: int, grid_step: int) -> Dict:
     """Compute layout statistics."""
     if not instances:
@@ -275,6 +325,33 @@ def test_3_walls_comparison():
     print(f"\n{'-'*50}")
     print(f"TOTAL OPTIMIZED: reward = {opt_total_reward:.2f}")
 
+    # === OVERLAP CHECK ===
+    print("\n" + "#" * 60)
+    print("#  OVERLAP CHECK (optimized)")
+    print("#" * 60)
+
+    has_any_overlap = False
+    for i in range(len(walls) - 1):
+        wall1 = walls[i]
+        wall2 = walls[i + 1]
+        res1 = opt_result.wall_results.get(wall1.id)
+        res2 = opt_result.wall_results.get(wall2.id)
+
+        if res1 and res2:
+            overlap = check_overlap(
+                res1.grid, res2.grid,
+                wall1.weight, wall2.weight,
+                GRID_STEP
+            )
+            status = "OVERLAP!" if overlap["has_overlap"] else "OK"
+            print(f"  Wall {wall1.id} <-> Wall {wall2.id}: {status}")
+            if overlap["has_overlap"]:
+                has_any_overlap = True
+                print(f"    Cells: {overlap['overlap_cells']}")
+
+    if not has_any_overlap:
+        print("\n  All joints: NO OVERLAP")
+
     # === COMPARISON ===
     print("\n" + "#" * 60)
     print("#  COMPARISON")
@@ -311,6 +388,57 @@ def test_4_walls_chain():
         wall_result = opt_result.wall_results.get(wall.id)
         if wall_result:
             print_wall_result(wall.id, wall, wall_result.instances, wall_result.reward)
+
+
+def test_different_lengths():
+    """Test with different wall lengths: 2400, 3600, 2100mm."""
+    print("\n\n" + "=" * 60)
+    print("TEST: Different wall lengths (2400, 3600, 2100mm)")
+    print("=" * 60)
+
+    walls = [
+        WallInstance(id=1, length=2400, height=1800, weight=300, grid_step=GRID_STEP),
+        WallInstance(id=2, length=3600, height=1800, weight=300, grid_step=GRID_STEP),
+        WallInstance(id=3, length=2100, height=1800, weight=300, grid_step=GRID_STEP),
+    ]
+
+    runner = ModelRunner(model_path="src/builder/data/ppo_fbs_builder")
+    context = ContextBuilder(grid_step=GRID_STEP)
+
+    opt_result = run_optimized(walls, runner, context)
+
+    print(f"\nBonding: {opt_result.bonding_assignments}")
+    print(f"Total score: {opt_result.total_score:.2f}")
+    print(f"RL calls: {opt_result.num_rl_calls}")
+
+    for wall in walls:
+        wall_result = opt_result.wall_results.get(wall.id)
+        if wall_result:
+            print_wall_result(wall.id, wall, wall_result.instances, wall_result.reward)
+
+    # Overlap check
+    print("\n" + "-" * 50)
+    print("OVERLAP CHECK:")
+    has_any_overlap = False
+    for i in range(len(walls) - 1):
+        wall1 = walls[i]
+        wall2 = walls[i + 1]
+        res1 = opt_result.wall_results.get(wall1.id)
+        res2 = opt_result.wall_results.get(wall2.id)
+
+        if res1 and res2:
+            overlap = check_overlap(
+                res1.grid, res2.grid,
+                wall1.weight, wall2.weight,
+                GRID_STEP
+            )
+            status = "OVERLAP!" if overlap["has_overlap"] else "OK"
+            print(f"  Wall {wall1.id} <-> Wall {wall2.id}: {status}")
+            if overlap["has_overlap"]:
+                has_any_overlap = True
+
+    if not has_any_overlap:
+        print("  All joints: NO OVERLAP")
 
 
 if __name__ == "__main__":

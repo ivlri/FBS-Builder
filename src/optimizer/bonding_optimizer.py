@@ -87,23 +87,96 @@ class BondingOptimizer:
         """
         Optimize for a simple chain of walls (W0 -- W1 -- W2 -- ...).
 
+        Processes walls sequentially, passing occupied cells between neighbors
+        to prevent block overlap at joints.
+
         Args:
             walls: Ordered list of walls forming a chain
 
         Returns:
             OptimizationResult
         """
-        # Build adjacency for chain
-        adjacency = {}
-        for i, wall in enumerate(walls):
-            neighbors = []
-            if i > 0:
-                neighbors.append(walls[i - 1].id)
-            if i < len(walls) - 1:
-                neighbors.append(walls[i + 1].id)
-            adjacency[wall.id] = neighbors
+        if len(walls) == 0:
+            return OptimizationResult({}, {}, 0.0, 0)
 
-        return self.optimize(walls, adjacency)
+        if len(walls) == 1:
+            result = self._run_inference(walls[0], None, None, None, None)
+            return OptimizationResult({}, {walls[0].id: result}, result.quality_score, 1)
+
+        n_joints = len(walls) - 1
+        best_result = None
+
+        total_rl_calls = 0
+
+        # Try all bonding combinations for joints
+        for bonding_combo in product([0, 1], repeat=n_joints):
+            wall_results: Dict[int, WallResult] = {}
+            bonding_assignments: Dict[Tuple[int, int], int] = {}
+            total_score = 0.0
+
+            # Assign bonding types to joints
+            for i, bonding in enumerate(bonding_combo):
+                bonding_assignments[(walls[i].id, walls[i + 1].id)] = bonding
+
+            # Process walls sequentially
+            left_occupied = None
+            for i, wall in enumerate(walls):
+                left_wall = walls[i - 1] if i > 0 else None
+                right_wall = walls[i + 1] if i < len(walls) - 1 else None
+
+                # Get bonding types for this wall
+                bonding_left = None
+                bonding_right = None
+                if i > 0:
+                    joint = (walls[i - 1].id, wall.id)
+                    bonding = bonding_assignments.get(joint)
+                    # Invert: if Wall N-1 blocks L0,L2 on right,
+                    # Wall N blocks L1,L3 on left (chess pattern)
+                    bonding_left = 1 - bonding if bonding is not None else None
+                if i < len(walls) - 1:
+                    joint = (wall.id, walls[i + 1].id)
+                    bonding_right = bonding_assignments.get(joint)
+
+                # Run inference
+                result = self._run_inference(
+                    wall, left_wall, right_wall,
+                    bonding_left, bonding_right,
+                    left_occupied=left_occupied,
+                )
+
+                wall_results[wall.id] = result
+                total_score += result.quality_score
+
+                # Extract right edge for next wall
+                if i < len(walls) - 1 and result.grid is not None:
+                    next_wall_thickness = walls[i + 1].weight
+                    width_cells = next_wall_thickness // self.context_builder.grid_step
+                    left_occupied = self.context_builder.extract_edge_occupied(
+                        result.grid, 'right', width_cells
+                    )
+                else:
+                    left_occupied = None
+
+            total_rl_calls += len(walls)
+
+            # Check if this is the best combination
+            if best_result is None or total_score > best_result.total_score:
+                best_result = OptimizationResult(
+                    bonding_assignments=bonding_assignments.copy(),
+                    wall_results=wall_results.copy(),
+                    total_score=total_score,
+                    num_rl_calls=total_rl_calls,
+                )
+
+        # Update final RL call count
+        best_result = OptimizationResult(
+            bonding_assignments=best_result.bonding_assignments,
+            wall_results=best_result.wall_results,
+            total_score=best_result.total_score,
+            num_rl_calls=total_rl_calls,
+        )
+
+        return best_result
 
     def _build_graph(
         self,
@@ -366,19 +439,27 @@ class BondingOptimizer:
         right_wall: Optional[WallInstance],
         bonding_left: Optional[int],
         bonding_right: Optional[int],
+        left_occupied: Optional[np.ndarray] = None,
+        right_occupied: Optional[np.ndarray] = None,
     ) -> WallResult:
         """
         Run RL inference for a single wall with given constraints.
+
+        Args:
+            left_occupied: Occupied cells from left neighbor's right edge
+            right_occupied: Occupied cells from right neighbor's left edge
         """
         self.rl_call_count += 1
 
-        # Build context grid with specified bonding
+        # Build context grid with specified bonding and occupied cells
         context_grid = self.context_builder.build_grid_with_bonding(
             wall=wall,
             left_wall=left_wall,
             right_wall=right_wall,
             bonding_left=bonding_left,
             bonding_right=bonding_right,
+            left_occupied=left_occupied,
+            right_occupied=right_occupied,
         )
 
         # Create fake walls list and context_data for ModelRunner
