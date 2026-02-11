@@ -161,14 +161,14 @@ def print_wall_result(wall_id: int, wall: WallInstance, instances: Dict, reward:
     print(f"\n{'-'*50}")
     print(f"Wall {wall_id}: {wall.length}mm x {wall.height}mm (weight {wall.weight}mm)")
     print(f"Reward: {reward:.2f}")
-    print(f"{'-'*50}")
+    print("{'-'*50}")
 
     output = format_layers(instances, grid_step=GRID_STEP)
     print(output["text"])
 
     # Statistics
     stats = compute_stats(instances, wall.num_cells, GRID_STEP)
-    print(f"\n  Stats:")
+    print("\n  Stats:")
     print(f"    FBS blocks: {stats['fbs_count']} ({stats['fbs_percent']:.1f}%)")
     print(f"    Monolith: {stats['monolith_mm']}mm ({stats['monolith_percent']:.1f}%)")
 
@@ -349,8 +349,8 @@ def test_4_walls_chain():
 
 if __name__ == "__main__":
     test_3_walls_comparison()
-    test_different_lengths()
-    test_4_walls_chain()
+    # test_different_lengths()
+    # test_4_walls_chain()
 
     print("\n" + "=" * 60)
     print("All tests completed!")

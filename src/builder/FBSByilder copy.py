@@ -1,6 +1,3 @@
-# fbs_builder_env.py
-# Stage 3: Single wall with openings (blocked zones)
-# Grid resolution: 300mm rows (600mm blocks span 2 rows, 300mm blocks span 1 row)
 import math
 from dataclasses import dataclass
 from typing import List, Tuple, Dict, Any, Set

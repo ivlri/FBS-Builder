@@ -1,9 +1,3 @@
-"""
-Test BondingOptimizer on simple wall chains.
-
-Demonstrates that optimizer finds better bonding patterns than default.
-"""
-
 from src.builder.structures import WallInstance, GRID_STEP
 from src.contextbuilder.contextbuilder import ContextBuilder
 from src.runner.ModelRunner import ModelRunner

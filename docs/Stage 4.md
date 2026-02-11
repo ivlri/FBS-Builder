@@ -99,9 +99,9 @@ Wall 2 (последняя): [BLOCKED..|FREE]  — нет next, нечего б�
 
 2. Для каждого профиля:
 ```py
-    context = ContextBuilder.build(wall, profile, built_neighbors)
+    context = ContextBuilder.build()
     result = RL.predict(context)
-    score = evaluate(result)
+    score = score(result)
 ```
 
 3. Выбирается лучший профиль (может даже есть смысл раскладывать по 2 стены за раз, что бы в итоге получать лучшее качество)

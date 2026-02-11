@@ -1,9 +1,3 @@
-"""
-Integration test: WallPlanner + BondingOptimizer.
-
-Tests the full pipeline from raw wall coordinates to optimized layouts.
-"""
-
 from src.planner.wall_planner import WallPlanner, WallData
 from src.optimizer.bonding_optimizer import BondingOptimizer
 from src.contextbuilder.contextbuilder import ContextBuilder

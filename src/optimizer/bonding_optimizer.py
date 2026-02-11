@@ -1,10 +1,3 @@
-"""
-Bonding Optimizer: finds optimal bonding patterns for wall joints.
-
-Uses DP for tree-structured graphs, Beam Search for graphs with cycles.
-Runs RL inference multiple times to evaluate different bonding combinations.
-"""
-
 from typing import Dict, List, Tuple, Optional, Set, Any
 from itertools import product
 from dataclasses import dataclass

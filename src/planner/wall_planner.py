@@ -1,9 +1,3 @@
-"""
-WallPlanner: Refactored planner for integration with BondingOptimizer.
-
-Extracts wall graph operations into reusable class without side effects.
-"""
-
 from typing import List, Dict, Tuple, Optional, Set
 from dataclasses import dataclass
 import math
