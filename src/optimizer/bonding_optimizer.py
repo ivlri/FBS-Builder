@@ -39,7 +39,7 @@ class BondingOptimizer:
     def __init__(
         self,
         runner: ModelRunner,
-        context_builder: Optional[ContextBuilder] = None,
+        context_builder: ContextBuilder,
         beam_width: int = 5,
     ):
         """
@@ -49,7 +49,7 @@ class BondingOptimizer:
             beam_width: Width for beam search (used when graph has cycles)
         """
         self.runner = runner
-        self.context_builder = context_builder or ContextBuilder()
+        self.context_builder = context_builder
         self.beam_width = beam_width
         self.rl_call_count = 0
 
@@ -124,7 +124,6 @@ class BondingOptimizer:
         return G
 
     def _has_cycles(self, G: nx.Graph) -> bool:
-        """Check if graph has cycles."""
         return len(G.edges()) >= len(G.nodes())
 
     def _tree_dp(
@@ -228,10 +227,7 @@ class BondingOptimizer:
         # Try both options for root (no incoming bonding, but may have outgoing)
         best_overall = (float('-inf'), {}, {})
 
-        for root_bonding in [None]:  # Root has no incoming edge
-            score, assignments, results = solve(root, None, root_bonding)
-            if score > best_overall[0]:
-                best_overall = (score, assignments, results)
+        best_overall = solve(root, None, None)
 
         return OptimizationResult(
             bonding_assignments=best_overall[1],

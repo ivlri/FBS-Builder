@@ -1,10 +1,3 @@
-"""
-Visual test for BondingOptimizer.
-
-Shows block layout in format suitable for manual transfer to Revit.
-Compares default bonding vs optimized bonding.
-"""
-
 from typing import List, Dict, Any
 from collections import defaultdict
 
@@ -14,8 +7,6 @@ from src.contextbuilder.contextbuilder import ContextBuilder
 from src.runner.ModelRunner import ModelRunner
 from src.optimizer.bonding_optimizer import BondingOptimizer, OptimizationResult
 
-
-# Block type names for readable output
 BLOCK_NAMES = {bt.id: bt.name for bt in BLOCK_TYPES}
 
 
@@ -161,7 +152,7 @@ def print_wall_result(wall_id: int, wall: WallInstance, instances: Dict, reward:
     print(f"\n{'-'*50}")
     print(f"Wall {wall_id}: {wall.length}mm x {wall.height}mm (weight {wall.weight}mm)")
     print(f"Reward: {reward:.2f}")
-    print("{'-'*50}")
+    print('-'*50)
 
     output = format_layers(instances, grid_step=GRID_STEP)
     print(output["text"])
@@ -237,7 +228,7 @@ def run_optimized(walls: List[WallInstance], runner: ModelRunner, context: Conte
 def test_3_walls_comparison():
     """Compare default vs optimized on 3 walls."""
     print("=" * 60)
-    print("TEST: Compare default vs optimized (3 walls)")
+    print("TEST: Compare default vs optimized")
     print("=" * 60)
 
     walls = [
@@ -292,31 +283,6 @@ def test_3_walls_comparison():
     print(f"\n  Default:   {default_total_reward:.2f}")
     print(f"  Optimized: {opt_total_reward:.2f}")
     print(f"  Diff:      {diff:+.2f} ({diff/abs(default_total_reward)*100 if default_total_reward else 0:+.1f}%)")
-
-
-def test_different_lengths():
-    """Test with different wall lengths."""
-    print("\n\n" + "=" * 60)
-    print("TEST: Different wall lengths")
-    print("=" * 60)
-
-    walls = [
-        WallInstance(id=1, length=2400, height=1800, weight=300, grid_step=GRID_STEP),
-        WallInstance(id=2, length=3600, height=1800, weight=300, grid_step=GRID_STEP),
-        WallInstance(id=3, length=2100, height=1800, weight=300, grid_step=GRID_STEP),
-    ]
-
-    runner = ModelRunner(model_path="src/builder/data/ppo_fbs_builder")
-    context = ContextBuilder(grid_step=GRID_STEP)
-
-    opt_result = run_optimized(walls, runner, context)
-
-    print(f"\nBonding: {opt_result.bonding_assignments}")
-
-    for wall in walls:
-        wall_result = opt_result.wall_results.get(wall.id)
-        if wall_result:
-            print_wall_result(wall.id, wall, wall_result.instances, wall_result.reward)
 
 
 def test_4_walls_chain():

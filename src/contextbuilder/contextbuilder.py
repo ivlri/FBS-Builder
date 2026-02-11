@@ -29,7 +29,7 @@ class ContextBuilder:
         context_data: Optional[Dict] = None,
     ) -> np.ndarray:
         """
-        Build constraint grid for a wall.
+        Build constraint grid for a wall. Used in FBSBuilderEnv
 
         Args:
             walls: List of all walls

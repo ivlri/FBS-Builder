@@ -107,7 +107,7 @@ class ModelRunner:
     
     def run(
             self, 
-            wall: Optional[WallInstance], 
+            wall: WallInstance, 
             openings: Optional[Opening]=None, 
             context_builder: Optional[ContextBuilder] = None,
             context_data: dict = None,
