@@ -707,6 +707,12 @@ class FBSBuilderEnv(gym.Env):
             b_cells = self.block_cells[t_idx]  # = 1
             h_rows = self.block_rows[t_idx]    # 1 for 300mm
 
+            # As long there is least one valid FBS, the monolith is prohibited
+            fbs_actions_exist = np.any(mask[self.max_cells: self.n_types * self.max_cells])
+
+            if fbs_actions_exist:
+                continue
+
             for s in range(self.num_cells):
                 if self._intersects(row, s, s + b_cells, h_rows):
                     continue
@@ -724,7 +730,7 @@ class FBSBuilderEnv(gym.Env):
                     continue
 
                 # Monolith on monolith
-                if row > 0 and (row // 2) != ((row - 1) // 2):
+                if row > 0: #and (row // 2) != ((row - 1) // 2):
                     below_filled = self.grid[row - 1, s] != 0
                     below_is_monolith = self.grid_human[row - 1, s] == 0
                     if below_filled and below_is_monolith:
@@ -786,38 +792,52 @@ class FBSBuilderEnv(gym.Env):
         if row < 4 or row + 1 >= self.num_rows:
             return False
 
-        # Current row-pair must be empty (excluding blocked zones)
+        # Current row pair must be empty (excluding blocked zones)
         if not self._is_row_pair(row):
             return False
 
-        # Source row-pair must be fully filled
+        # Source row pair must be fully filled
         if not self._is_row_pair(row - 4):
             return False
 
         # Check that all blocks from source rows can be placed
-        for src_r_offset in [0, 1]:
-            src_r = row - 4 + src_r_offset
-            dst_r = row + src_r_offset
-            source_instances = [
-                (inst_id, meta) for inst_id, meta in self.inst.items()
-                if meta["row"] == src_r
-            ]
-            for inst_id, meta in source_instances:
-                start = meta["start"]
-                end = meta["end"]
+        # for src_r_offset in [0, 1]:
+        #     src_r = row - 4 + src_r_offset
+        #     dst_r = row + src_r_offset
+        #     source_instances = [
+        #         (inst_id, meta) for inst_id, meta in self.inst.items()
+        #         if meta["row"] == src_r
+        #     ]
+        #     for inst_id, meta in source_instances:
+        #         start = meta["start"]
+        #         end = meta["end"]
                 
-                if not self._check_bonding(dst_r, start, end):
-                    return False
+        #         if not self._check_bonding(dst_r, start, end):
+        #             return False
                 
-                block_h = (
-                    self.block_types[self._type_idx_by_id(meta["type_id"])].height 
-                    if meta["type_id"] != 0 
-                    else 300
-                )
+        #         block_h = (
+        #             self.block_types[self._type_idx_by_id(meta["type_id"])].height 
+        #             if meta["type_id"] != 0 
+        #             else 300
+        #         )
 
-                if not self._check_seam_alignment(dst_r, start, end, block_h):
-                    return False
+        #         if not self._check_seam_alignment(dst_r, start, end, block_h):
+        #             return False
+        for r_off in [0, 1]:
+            src_r = row - 4 + r_off
+            dst_r = row + r_off
 
+            for c in range(self.num_cells):
+                if self.blocked_mask[dst_r, c] == 1:
+                    continue
+
+                # если есть блок — в целевом месте должно быть пусто
+                if self.grid[src_r, c] != 0:
+                    if self.grid[dst_r, c] != 0:
+                        return False
+
+                    if not self._check_bonding(dst_r, c, c + 1):
+                        return False
         return True
     
     def _execute_copy_layer(self):
