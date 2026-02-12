@@ -1,6 +1,6 @@
 #--------- Training / Validation---------
 if __name__ == "__main__":
-    from builder.fbs_builder import FBSBuilderEnv, EpisodeRewardCallback
+    from src.builder.fbs_builder import FBSBuilderEnv, EpisodeRewardCallback
     from src.builder.structures import  WallInstance
 
     from sb3_contrib import MaskablePPO
@@ -105,7 +105,7 @@ if __name__ == "__main__":
             plt.grid()
 
             plt.tight_layout()
-            plt.savefig("data/training_progress.png")
+            plt.savefig("src/builder/data/training_progress.png")
             plt.show()
 
         return model

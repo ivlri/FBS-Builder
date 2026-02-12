@@ -47,9 +47,9 @@ class FBSBuilderEnv(gym.Env):
 
     def __init__(
         self,
-        wall_instance: WallInstance = None,
+        wall_instance: Optional[WallInstance] = None,
         context_builder: Optional[ContextBuilder] = None,
-        context_data: dict = None,
+        context_data: Optional[dict] = None,
 
         block_types: List[BlockType] = None,
         render_mode: str = None,
@@ -194,7 +194,7 @@ class FBSBuilderEnv(gym.Env):
         self.grid_human = None
         self.current_row = None
         self.step_count = 0
-        self.total_reward = 0.0
+        self.total_reward = 0
 
         self.inst_counter = 1
         self.inst = {}
@@ -291,7 +291,7 @@ class FBSBuilderEnv(gym.Env):
         return False
 
     def _creates_small_edge_gap(self, row: int, start: int, end: int) -> bool:
-        """True if placement creates unfillable gap at wall edge or next to blocked zone"""
+        """True if placement creates small gap at wall edge or next to blocked zone"""
         min_fbs = min(self.block_cells[1:])
         r = self.grid[row]
         blocked = self.blocked_mask[row] if self.blocked_mask is not None else np.zeros(self.max_cells, dtype=np.int8)
@@ -357,23 +357,23 @@ class FBSBuilderEnv(gym.Env):
     def _bonding_block_pen(self, row: int, start: int, end: int, block_height: int) -> float:
         """Penalty for vertical seams too close between rows"""
         if row == 0:
-            return 0.0
+            return 0
 
         min_bound = 0.4 * block_height
         min_cells = int(min_bound // self.grid_step)
 
         seams_below = self._find_block_bound(row - 1)
         if len(seams_below) == 0:
-            return 0.0
+            return 0
 
         internal_seams_below = seams_below[
             (seams_below >= min_cells) & (seams_below <= self.num_cells - min_cells)
         ]
 
         if len(internal_seams_below) == 0:
-            return 0.0
+            return 0
 
-        penalty = 0.0
+        penalty = 0
         new_bounds = []
         if start >= min_cells:
             new_bounds.append(start)
@@ -388,7 +388,7 @@ class FBSBuilderEnv(gym.Env):
 
             d = np.min(np.abs(internal_seams_below - bound))
             if d < min_cells:
-                penalty += 2.0
+                penalty += 2
                 self.pen_bounds.add(bound_key)
 
         return penalty
@@ -396,7 +396,7 @@ class FBSBuilderEnv(gym.Env):
     def _big_mon_penalty(self, row: int) -> float:
         """Penalty for large monolith sections in a row"""
         current_row = self.grid_human[row, :self.num_cells]
-        penalty = 0.0
+        penalty = 0
         gaps = []
         i = 0
         n = len(current_row)
@@ -414,20 +414,20 @@ class FBSBuilderEnv(gym.Env):
         min_block_cells = min(self.block_cells[1:])
         for g in gaps:
             if g > min_block_cells:
-                penalty += 1.0 * (g / min_block_cells)
+                penalty += 1 * (g / min_block_cells)
 
         return penalty
     
     #--------- Core reward Calculations ---------
     def _calc_continuity_bonus(self, row: int, start: int, end: int) -> float:
         """Bonus for placing blocks adjacent to existing blocks"""
-        bonus = 0.0
+        bonus = 0
         r = self.grid[row]
 
         if start > 0 and r[start - 1] != 0:
-            bonus += 2.0
+            bonus += 2
         if end < self.num_cells and r[end] != 0:
-            bonus += 2.0
+            bonus += 2
 
         return bonus
 
@@ -440,7 +440,7 @@ class FBSBuilderEnv(gym.Env):
 
     def _calc_gap_pen(self, row: int, start: int, end: int) -> float:
         """Penalty for creating small unfillable gaps"""
-        penalty = 0.0
+        penalty = 0
         row_inst = self.grid[row]
 
         if start > 0:
@@ -453,7 +453,7 @@ class FBSBuilderEnv(gym.Env):
 
             min_fbs_cells = min(self.block_cells[1:])
             if 0 < gap_size < min_fbs_cells:
-                penalty += 1.0 * (1.0 - gap_size / min_fbs_cells)
+                penalty += 1 * (1 - gap_size / min_fbs_cells)
 
         if end < self.num_cells:
             right_filled = self._find_filled(row_inst, end)
@@ -465,13 +465,13 @@ class FBSBuilderEnv(gym.Env):
 
             min_fbs_cells = min(self.block_cells[1:])
             if 0 < gap_size < min_fbs_cells:
-                penalty += 1.0 * (1.0 - gap_size / min_fbs_cells)
+                penalty += 1 * (1 - gap_size / min_fbs_cells)
 
         return penalty
 
     def _calc_edge_bonus(self, row: int, start: int, end: int) -> float:
         """Bonus for placing blocks at wall edges"""
-        bonus = 0.0
+        bonus = 0
         if start == 0:
             bonus += 1.5
 
@@ -706,6 +706,7 @@ class FBSBuilderEnv(gym.Env):
         for t_idx in [0]:
             b_cells = self.block_cells[t_idx]  # = 1
             h_rows = self.block_rows[t_idx]    # 1 for 300mm
+
             for s in range(self.num_cells):
                 if self._intersects(row, s, s + b_cells, h_rows):
                     continue
@@ -713,16 +714,25 @@ class FBSBuilderEnv(gym.Env):
                     continue
                 if not self._is_on_frontier(row, s, s + b_cells):
                     continue
+                
                 # Only allow monolith where no FBS can cover this cell
                 if fbs_can_fit[s]:
                     continue
+
                 # Ban positions 0 and num_cells-1 (edges should have FBS)
                 if s == 0 or s == self.num_cells - 1:
                     continue
+
+                # Monolith on monolith
+                if row > 0 and (row // 2) != ((row - 1) // 2):
+                    below_filled = self.grid[row - 1, s] != 0
+                    below_is_monolith = self.grid_human[row - 1, s] == 0
+                    if below_filled and below_is_monolith:
+                        continue
                 action_idx = t_idx * self.max_cells + s
                 mask[action_idx] = 1
 
-        # Safety valve: if mask is completely empty, re-allow monolith at edges
+        # Safety valve: if mask is completely empty, allow monolith at edges
         if not np.any(mask):
             for t_idx in [0]:  # Try monolith
                 b_cells = self.block_cells[t_idx]
@@ -815,7 +825,7 @@ class FBSBuilderEnv(gym.Env):
         Execute COPY_LAYER action: copy row-pair from 4 rows below.
         """
         row = self.current_row
-        step_reward = 0.0
+        step_reward = 0
         info = {}
 
         fbs_block_count = 0
@@ -867,14 +877,14 @@ class FBSBuilderEnv(gym.Env):
                     fbs_block_count += 1
 
         # COPY_LAYER reward
-        step_reward += 50.0 + 12.0 * fbs_block_count
+        step_reward += 50 + 12 * fbs_block_count
 
         # Row completion bonus
-        step_reward += 3.0
+        step_reward += 3
         blocks_in_row = len(set(self.grid[row, :self.num_cells]) - {0, -1})
         min_possible_blocks = self.num_cells // self.max_fbs_cells
         efficiency = min_possible_blocks / max(blocks_in_row, 1)
-        efficiency_bonus = 5.0 * min(efficiency, 1.0)
+        efficiency_bonus = 5 * min(efficiency, 1)
         step_reward += efficiency_bonus
 
         self._advance_row()
@@ -883,7 +893,7 @@ class FBSBuilderEnv(gym.Env):
         truncated = False
 
         if self.current_row >= self.num_rows:
-            step_reward += 20.0
+            step_reward += 20
             terminated = True
             info["reason"] = "all_rows_completed"
         elif self.step_count >= self.max_steps:
@@ -975,7 +985,7 @@ class FBSBuilderEnv(gym.Env):
 
         self.current_row = 0
         self.step_count = 0
-        self.total_reward = 0.0
+        self.total_reward = 0
         self.has_openings = False
 
         # Apply openings/randomize/instance restrictions
@@ -996,9 +1006,7 @@ class FBSBuilderEnv(gym.Env):
         info = {}
         terminated = False
         truncated = False
-        step_reward = 0.0
-
-        step_reward -= 0.02
+        step_reward = 0
 
         action = int(action)
 
@@ -1007,19 +1015,19 @@ class FBSBuilderEnv(gym.Env):
             if self._can_copy_layer(self.current_row):
                 return self._execute_copy_layer()
             else:
-                step_reward = -1.0
+                step_reward = -1
                 self.total_reward += step_reward
                 return self._get_obs(), step_reward, False, False, {"invalid": "copy_not_allowed"}
 
         t_idx, start = self.decode_action(action)
 
         if not (0 <= t_idx < self.n_types):
-            step_reward = -1.0
+            step_reward = -1
             self.total_reward += step_reward
             return self._get_obs(), step_reward, False, False, {"invalid": "type_idx"}
 
         if not (0 <= start < self.max_cells):
-            step_reward = -1.0
+            step_reward = -1
             self.total_reward += step_reward
             return self._get_obs(), step_reward, False, False, {"invalid": "start"}
 
@@ -1030,23 +1038,23 @@ class FBSBuilderEnv(gym.Env):
         row = self.current_row
 
         if row + h_rows > self.num_rows:
-            step_reward = -1.0
+            step_reward = -1
             self.total_reward += step_reward
             return self._get_obs(), step_reward, True, False, {"reason": "row_overflow"}
 
         # Placement checks
         if not self._fits_bounds(start, b_cells, row, h_rows):
-            step_reward = -1.0
+            step_reward = -1
             self.total_reward += step_reward
             return self._get_obs(), step_reward, False, False, {"invalid": "bounds"}
 
         if self._intersects(row, start, end, h_rows):
-            step_reward = -1.0
+            step_reward = -1
             self.total_reward += step_reward
             return self._get_obs(), step_reward, False, False, {"invalid": "intersects"}
 
         if not self._check_bonding(row, start, end):
-            step_reward = -1.0
+            step_reward = -1
             self.total_reward += step_reward
             return self._get_obs(), step_reward, False, False, {"invalid": "bonding"}
 
@@ -1071,8 +1079,14 @@ class FBSBuilderEnv(gym.Env):
         # 1. Block size reward
         if block_type_id != 0:
             size_ratio = b_cells / self.max_fbs_cells
-            block_reward = 5.0 + 15.0 * size_ratio
+            block_reward = 5 + 15 * size_ratio
             step_reward += block_reward
+
+        # A new bonus by the block type
+        if block_type_id == 2:      # ФБС-24
+            step_reward += 3.0
+        elif block_type_id == 3:    # ФБС-12
+            step_reward += 1.5
 
         # 2. Continuity bonus
         continuity_bonus = self._calc_continuity_bonus(row, start, end)
@@ -1093,49 +1107,60 @@ class FBSBuilderEnv(gym.Env):
         step_reward -= bonding_penalty
 
         # 6. Monolith near edge penalty (gradient)
-        if block_type_id == 0:
-            min_fbs = min(self.block_cells[1:])
-            if start < min_fbs:
-                edge_ratio = 1.0 - (start / min_fbs)
-                step_reward -= 10.0 * edge_ratio
-            if end > self.num_cells - min_fbs:
-                edge_ratio = 1.0 - ((self.num_cells - end) / min_fbs)
-                step_reward -= 10.0 * edge_ratio
+        if block_type_id == 0 and (start == 0 or end == self.num_cells):
+            # If it is not a bandaging (blocked_mask == 0)
+            if self.blocked_mask[row, start] == 0:
+                step_reward -= 2.0
+        # if block_type_id == 0:
+        #     dist_to_center = min(start, self.num_cells - end)
+        #     min_fbs = min(self.block_cells[1:])
+        #     if dist_to_center > min_fbs:
+        #         step_reward = 5 * (dist_to_center/(self.num_cells/2))
 
-        # 7. Monolith-on-monolith penalty (only across layer boundaries not within same 600mm layer)
-        if block_type_id == 0 and row > 0 and (row // 2) != ((row - 1) // 2):
-            below_filled = self.grid[row - 1, start] != 0
-            below_is_monolith = self.grid_human[row - 1, start] == 0
+            # if start < min_fbs:
+            #     edge_ratio = 1 - (start / min_fbs)
+            #     step_reward -= 10 * edge_ratio
+            # if end > self.num_cells - min_fbs:
+            #     edge_ratio = 1 - ((self.num_cells - end) / min_fbs)
+            #     step_reward -= 10 * edge_ratio
 
-            if below_filled and below_is_monolith:
-                step_reward -= 8.0
+        # 7. Monolith on monolith penalty (only across layer boundaries not within same 600mm layer)
+        # if block_type_id == 0 and row > 0 and (row // 2) != ((row - 1) // 2):
+        #     below_filled = self.grid[row - 1, start] != 0
+        #     below_is_monolith = self.grid_human[row - 1, start] == 0
+
+        #     if below_filled and below_is_monolith:
+        #         step_reward -= 10
 
         #--------- Row completion ---------
         row_filled = (self.grid[row, :self.num_cells] != 0) | (self.blocked_mask[row, :self.num_cells] == 1)
         if np.all(row_filled):
-            step_reward += 3.0
+            step_reward += 3
 
             blocks_in_row = len(set(self.grid[row, :self.num_cells]) - {0, -1})
             min_possible_blocks = self.num_cells // self.max_fbs_cells
 
             efficiency = min_possible_blocks / max(blocks_in_row, 1)
-            efficiency_bonus = 5.0 * min(efficiency, 1.0)
-
+            efficiency_bonus = 10 * min(efficiency, 1)
             step_reward += efficiency_bonus
+
+            # Explicit penalty for excess blocks
+            block_count_penalty = -2.0 * max(0, blocks_in_row - min_possible_blocks)
+            step_reward += block_count_penalty
 
             mon_penalty = self._big_mon_penalty(row) * 0.5
             step_reward -= mon_penalty
-
+        
             self._advance_row()
 
         #--------- Termination ---------
         action_mask = self.compute_action_mask()
         if not np.any(action_mask) and self.current_row < self.num_rows:
-            step_reward -= 10.0
+            step_reward -= 10
             terminated = True
             info["reason"] = "no_legal_moves"
         elif self.current_row >= self.num_rows:
-            step_reward += 20.0
+            step_reward += 20
             terminated = True
             info["reason"] = "all_rows_completed"
         elif self.step_count >= self.max_steps:
