@@ -771,12 +771,27 @@ class FBSBuilderEnv(gym.Env):
     #========================================
     #Copy layer action
     #========================================
-    def _is_row_pair(self, row):
+    def _is_row_pair_empty(self, row: int) -> bool:
+        """Check if row pair [row, row+1] is empty in non-blocked zones."""
         for r in [row, row + 1]:
+            if r >= self.num_rows:
+                return False
             non_blocked = self.blocked_mask[r, :self.num_cells] == 0
             if np.any(self.grid[r, :self.num_cells][non_blocked] != 0):
                 return False
-        
+        return True
+
+    def _is_row_pair_filled(self, row: int) -> bool:
+        """Check if row pair [row, row+1] is fully filled in non-blocked zones."""
+        for r in [row, row + 1]:
+            if r >= self.num_rows:
+                return False
+            non_blocked = self.blocked_mask[r, :self.num_cells] == 0
+            # All non-blocked cells must be filled
+            if np.any(self.grid[r, :self.num_cells][non_blocked] == 0):
+                return False
+        return True
+
     def _type_idx_by_id(self, type_id: int) -> int:
         """Find block_types index by type id."""
         for i, bt in enumerate(self.block_types):
@@ -793,11 +808,11 @@ class FBSBuilderEnv(gym.Env):
             return False
 
         # Current row pair must be empty (excluding blocked zones)
-        if not self._is_row_pair(row):
+        if not self._is_row_pair_empty(row):
             return False
 
         # Source row pair must be fully filled
-        if not self._is_row_pair(row - 4):
+        if not self._is_row_pair_filled(row - 4):
             return False
 
         # Check that all blocks from source rows can be placed
