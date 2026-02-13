@@ -9,27 +9,8 @@ import gymnasium as gym
 from gymnasium import spaces
 from gymnasium.envs.registration import register
 from stable_baselines3.common.callbacks import BaseCallback
-from .structures import BlockType, WallInstance, Opening
+from .structures import BlockType, WallInstance, Opening, BLOCK_TYPES
 from src.contextbuilder.contextbuilder import ContextBuilder
-
-
-# === Default block types ===
-BLOCK_TYPES = [
-
-    # Monolith
-    BlockType(id=0, length=20,   height=300, name="Монолит 300"),
-
-    # FBS 600mm
-    BlockType(id=2, length=2400, height=600, name="ФБС 24.6"),
-    BlockType(id=3, length=1200, height=600, name="ФБС 12.6"),
-    BlockType(id=4, length=900,  height=600, name="ФБС 9.6"),
-
-    # FBS 300mm
-    BlockType(id=5, length=2400, height=300, name="ФБС 24.3"),
-    BlockType(id=6, length=1200, height=300, name="ФБС 12.3"),
-    BlockType(id=7, length=900,  height=300, name="ФБС 9.3")
-
-]
 
 MAX_HALF_PROX = 60 
 

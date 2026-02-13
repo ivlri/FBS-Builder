@@ -3,8 +3,8 @@ from collections import defaultdict
 import numpy as np
 
 from src.solver.solver import FBSSolver
-from src.builder.structures import WallInstance, GRID_STEP
-from src.builder.fbs_builder import BLOCK_TYPES
+from src.solver.solver_pipeline import SolverPipeline, normalize_instances, visualize_pipeline
+from src.builder.structures import WallInstance, GRID_STEP, BLOCK_TYPES
 
 
 BLOCK_NAMES = {bt.id: bt.name for bt in BLOCK_TYPES}
@@ -246,5 +246,64 @@ def test_3_walls_solver():
     print("=" * 60)
 
 
+def test_pipeline_chain():
+    """Test SolverPipeline with connected walls."""
+    print("\n" + "=" * 60)
+    print("TEST: SOLVER PIPELINE (multi-wall with constraints)")
+    print("=" * 60)
+
+    walls = [
+        WallInstance(id=1, length=3000, height=1800, weight=300, grid_step=GRID_STEP),
+        WallInstance(id=2, length=3000, height=1800, weight=300, grid_step=GRID_STEP),
+        WallInstance(id=3, length=3000, height=1800, weight=300, grid_step=GRID_STEP),
+    ]
+
+    pipeline = SolverPipeline(grid_step=GRID_STEP)
+    result = pipeline.solve_chain(walls)
+
+    total_reward = 0
+
+    for wall in walls:
+        wall_result = result.wall_results[wall.id]
+        instances = normalize_instances(wall_result.instances)
+        reward = compute_reward(instances)
+        total_reward += reward
+
+        print_wall_result(wall.id, wall, instances)
+
+    print(f"\n{'-'*50}")
+    print(f"TOTAL PIPELINE: reward = {total_reward:.2f}")
+    print(f"Stats: {result.total_stats}")
+
+    # Check constraints propagation
+    print("\n" + "-" * 50)
+    print("Checking constraint propagation:")
+
+    for i in range(len(walls) - 1):
+        w1 = result.wall_results[walls[i].id]
+        w2 = result.wall_results[walls[i + 1].id]
+
+        # Check if wall 2 left edge respects wall 1 right edge
+        width = walls[i + 1].weight // GRID_STEP
+        w1_right = w1.grid[:, -width:]
+        w2_left = w2.grid[:, :width]
+
+        # Where w1 is occupied, w2 should be empty (or blocked=-1)
+        conflict = False
+        for r in range(min(w1_right.shape[0], w2_left.shape[0])):
+            for c in range(min(w1_right.shape[1], w2_left.shape[1])):
+                if w1_right[r, c] > 0 and w2_left[r, c] > 0:
+                    conflict = True
+                    print(f"  CONFLICT at wall {walls[i].id}->{walls[i+1].id}, row {r}, col {c}")
+
+        if not conflict:
+            print(f"  Wall {walls[i].id} -> Wall {walls[i+1].id}: OK (no overlap)")
+
+    # Visualization
+    print("\n")
+    print(visualize_pipeline(result, walls, GRID_STEP))
+
+
 if __name__ == "__main__":
     test_3_walls_solver()
+    test_pipeline_chain()
