@@ -247,13 +247,9 @@ class FBSSolver:
     def _solve_segment_beam(self, row: int, start: int, end: int):
         """Beam search for FBS blocks only (no monolith fallback)."""
 
-        # Check if segment can be filled 100% with FBS (no monolith)
-        can_fill_fully = self._can_fill_without_mono(row, start, end)
-
-        # Adjust mono penalty based on whether full FBS fill is possible
-        # If we CAN fill without mono, heavy penalty for using mono
-        # If we CANNOT, normal penalty
-        mono_penalty_multiplier = 10.0 if can_fill_fully else 1.0
+        # Mono penalty is low - we prefer fewer blocks over less monolith
+        # 1 block + monolith is better than 3 blocks (fewer crane lifts)
+        mono_penalty_multiplier = 0.5
 
         # Collect types already used in this wall (from previous rows)
         used_types_wall = set()
@@ -300,17 +296,26 @@ class FBSSolver:
                     if not self._check_seam(row, pos, cells, bt.height):
                         continue
 
-                    # Bonus for reusing same type, penalty for new type
-                    type_bonus = 20.0 if bt.id in state["types_used"] else -15.0
+                    # Small bonus for reusing same type, small penalty for new type
+                    # (secondary to block count optimization)
+                    type_bonus = 5.0 if bt.id in state["types_used"] else -5.0
                     new_types = state["types_used"] | {bt.id}
 
                     # Check if this creates unfillable gap (will need monolith)
                     remaining = end - (pos + cells)
                     if 0 < remaining < self.min_fbs_cells:
+                        # Check if gap would be at free edge (no neighbor wall)
+                        # Monolith at free edge is NOT allowed
+                        gap_at_free_edge = (end == self.num_cells and
+                                           self.blocked[row, end - 1] == 0)
+                        if gap_at_free_edge:
+                            # Skip this placement - would create invalid mono at edge
+                            continue
+
                         mono_penalty = remaining * mono_penalty_multiplier
 
                         gap_types = new_types | {0}
-                        gap_type_penalty = 0 if 0 in state["types_used"] else -15.0
+                        gap_type_penalty = 0 if 0 in state["types_used"] else -5.0
                         new_state = {
                             "pos": end,  # Skip to end gap will be filled with mono
                             "placements": state["placements"] + [(pos, cells, h_rows, bt.id)],
@@ -333,12 +338,20 @@ class FBSSolver:
 
                 # If no FBS fits, try skipping one cell (will be mono later)
                 if not placed_any:
+                    # Check if skip would create mono at free edge
+                    at_left_free_edge = (pos == 0 and self.blocked[row, 0] == 0)
+                    at_right_free_edge = (pos == self.num_cells - 1 and
+                                         self.blocked[row, self.num_cells - 1] == 0)
+                    if at_left_free_edge or at_right_free_edge:
+                        # Cannot place mono at free edge - this path is invalid
+                        continue
+
                     skip_types = state["types_used"] | {0}
-                    skip_type_penalty = 0 if 0 in state["types_used"] else -15.0
+                    skip_type_penalty = 0 if 0 in state["types_used"] else -10.0
                     new_state = {
                         "pos": pos + 1,
                         "placements": state["placements"],
-                        "score": state["score"] - 10 * mono_penalty_multiplier + skip_type_penalty,
+                        "score": state["score"] - 5 + skip_type_penalty,  # Small penalty for mono cell
                         "gaps": state["gaps"] + [(pos, pos + 1)],
                         "types_used": skip_types
                     }
@@ -369,21 +382,24 @@ class FBSSolver:
     def _score_block(self, bt: BlockType, cells: int) -> float:
         """
         Score prioritizes:
-        1. Fewer blocks (larger blocks preferred)
-        2. Less monolith (but acceptable if reduces block count)
+        1. Fewer blocks (each block = crane lift = expensive)
+        2. Larger blocks when count is same
+        3. Monolith is OK if it reduces block count
 
         Trade-off example:
-        - 3x ФБС-9 (900mm) = 3 blocks, 0 mono
-        - 2x ФБС-12 (1200mm) + 300mm mono = 2 blocks, 15 cells mono
+        - 3x ФБС-9 (900mm) = 3 blocks, 0 mono → 3 crane lifts
+        - 1x ФБС-24 (2400mm) + 300mm mono = 1 block → 1 crane lift
 
-        We prefer 2 large blocks + small mono over 3 small blocks.
+        We prefer 1 large block + monolith over 3 small blocks.
         """
         if bt.id == 0:
-            # Monolith: small penalty per cell
-            return -1.0 * cells
+            # Monolith: very small penalty (no crane needed)
+            return -0.5 * cells
 
-        size_bonus = cells * 2.0 
-        block_penalty = 30  # Each block costs -30
+        # Heavy penalty per block (crane lift cost)
+        block_penalty = 50
+        # Small bonus for larger blocks (same lift, more coverage)
+        size_bonus = cells * 1.0
 
         return size_bonus - block_penalty
 
