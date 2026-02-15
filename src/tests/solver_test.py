@@ -108,7 +108,7 @@ def format_layers(instances: Dict, grid_step: int = 20) -> str:
 
 
 # ============================================================
-# STATS + REWARD (same idea as RL)
+# STATS + REWARD
 # ============================================================
 
 def compute_stats(instances: Dict, grid_step: int) -> Dict:
@@ -219,16 +219,10 @@ def run_solver(walls: List[WallInstance]) -> List[Dict]:
 # TEST
 # ============================================================
 
-def test_3_walls_solver():
+def test_solver(walls):
     print("=" * 60)
     print("TEST: SOLVER on 3 walls")
     print("=" * 60)
-
-    walls = [
-        WallInstance(id=1, length=3000, height=1800, weight=300, grid_step=GRID_STEP),
-        WallInstance(id=2, length=3000, height=1800, weight=300, grid_step=GRID_STEP),
-        WallInstance(id=3, length=3000, height=1800, weight=300, grid_step=GRID_STEP),
-    ]
 
     results = run_solver(walls)
 
@@ -246,17 +240,11 @@ def test_3_walls_solver():
     print("=" * 60)
 
 
-def test_pipeline_chain():
+def test_vsolver(walls):
     """Test SolverPipeline with connected walls."""
     print("\n" + "=" * 60)
     print("TEST: SOLVER PIPELINE (multi-wall with constraints)")
     print("=" * 60)
-
-    walls = [
-        WallInstance(id=1, length=3000, height=1800, weight=300, grid_step=GRID_STEP),
-        WallInstance(id=2, length=3000, height=1800, weight=300, grid_step=GRID_STEP),
-        WallInstance(id=3, length=3000, height=1800, weight=300, grid_step=GRID_STEP),
-    ]
 
     pipeline = SolverPipeline(grid_step=GRID_STEP)
     result = pipeline.solve_chain(walls)
@@ -305,5 +293,10 @@ def test_pipeline_chain():
 
 
 if __name__ == "__main__":
-    test_3_walls_solver()
-    test_pipeline_chain()
+    walls = [
+        WallInstance(id=1, length=3000, height=1800, weight=300, grid_step=GRID_STEP),
+        WallInstance(id=2, length=1000, height=1800, weight=300, grid_step=GRID_STEP),
+        WallInstance(id=3, length=3000, height=1800, weight=300, grid_step=GRID_STEP),
+    ]
+    # test_solver(walls)
+    test_vsolver(walls)

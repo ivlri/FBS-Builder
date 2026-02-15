@@ -37,6 +37,8 @@ class FBSSolver:
         row_height: int = 300,
         min_seam_shift_ratio: float = 0.4,
         beam_width: int = 32,
+        left_overhang_mm: int = 0,
+        right_overhang_mm: int = 0,
     ):
 
         self.wall = wall
@@ -45,6 +47,12 @@ class FBSSolver:
         self.row_height = row_height
         self.min_seam_shift_ratio = min_seam_shift_ratio
         self.beam_width = beam_width
+
+        # Overhang limits in cells
+        self.left_overhang_cells = left_overhang_mm // grid_step
+        self.right_overhang_cells = right_overhang_mm // grid_step
+        self.left_overhang_mm = left_overhang_mm
+        self.right_overhang_mm = right_overhang_mm
 
         self.num_cells = wall.length // grid_step
         self.num_rows = wall.height // row_height
@@ -364,7 +372,17 @@ class FBSSolver:
             new_beam.sort(key=lambda s: s["score"], reverse=True)
             beam = new_beam[:self.beam_width]
 
+            # If beam is empty, all paths were filtered - fallback to monolith
+            if not beam:
+                self._fill_monolith(row, start, end)
+                return
+
         # Pick best finished state
+        if not beam:
+            # No valid paths found - fill with monolith
+            self._fill_monolith(row, start, end)
+            return
+
         best = max(beam, key=lambda s: s["score"])
 
         # Place FBS blocks
@@ -384,7 +402,8 @@ class FBSSolver:
         Score prioritizes:
         1. Fewer blocks (each block = crane lift = expensive)
         2. Larger blocks when count is same
-        3. Monolith is OK if it reduces block count
+        3. 600mm blocks preferred (cover 2 rows with 1 crane lift)
+        4. Monolith is OK if it reduces block count
 
         Trade-off example:
         - 3x ФБС-9 (900mm) = 3 blocks, 0 mono → 3 crane lifts
@@ -400,8 +419,11 @@ class FBSSolver:
         block_penalty = 50
         # Small bonus for larger blocks (same lift, more coverage)
         size_bonus = cells * 1.0
+        # Bonus for 600mm blocks: 1 crane lift covers 2 rows
+        # Without this, solver may prefer 2x300mm over 1x600mm
+        height_bonus = 30 if bt.height == 600 else 0
 
-        return size_bonus - block_penalty
+        return size_bonus - block_penalty + height_bonus
 
     # ============================================================
     # Checks
@@ -471,9 +493,34 @@ class FBSSolver:
     # P;ace
     # ============================================================
 
-    def _place_block(self, row: int, start: int, cells: int, h_rows: int, type_id: int):
+    def _place_block(
+        self,
+        row: int,
+        start: int,
+        cells: int,
+        h_rows: int,
+        type_id: int,
+        overhang_left: int = 0,
+        overhang_right: int = 0,
+    ):
+        """
+        Place a block on the grid.
+
+        Args:
+            row: Starting row
+            start: Starting cell (can be negative for left overhang)
+            cells: Block length in cells
+            h_rows: Block height in rows
+            type_id: Block type ID
+            overhang_left: Cells hanging off left edge (negative start)
+            overhang_right: Cells hanging off right edge (end > num_cells)
+        """
         inst_id = self.instance_counter
         self.instance_counter += 1
+
+        # Compute actual overhang
+        actual_overhang_left = max(0, -start)
+        actual_overhang_right = max(0, (start + cells) - self.num_cells)
 
         self.instances[inst_id] = {
             "row": row,
@@ -481,9 +528,15 @@ class FBSSolver:
             "end_cell": start + cells,
             "h_rows": h_rows,
             "type_id": type_id,
+            "overhang_left_mm": actual_overhang_left * self.grid_step,
+            "overhang_right_mm": actual_overhang_right * self.grid_step,
         }
 
-        self.grid[row:row + h_rows, start:start + cells] = inst_id
+        # Only write to grid within bounds
+        grid_start = max(0, start)
+        grid_end = min(self.num_cells, start + cells)
+        if grid_start < grid_end:
+            self.grid[row:row + h_rows, grid_start:grid_end] = inst_id
 
     # ============================================================
     # Openings

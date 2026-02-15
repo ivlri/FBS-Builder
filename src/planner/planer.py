@@ -84,32 +84,33 @@ def split_edge(G: nx.Graph,
                original_wall_id=orig)
     return True
 
-def process_intersections(G: nx.Graph) -> nx.Graph:
+def process_intersections(G: nx.Graph, verbose: bool = False) -> nx.Graph:
     G_proc = G.copy()
 
     for _ in range(5):
         current_edges = list(G_proc.edges(data=True))
         intersections_found = False
-        
+
         for i, (u1,v1,d1) in enumerate(current_edges):
             for j, (u2,v2,d2) in enumerate(current_edges[i+1:], i+1):
                 p = line_intersection(u1, v1, u2, v2)
                 if p and is_proper_intersection(p, (u1,v1), (u2,v2)):
-                    print(f"Вставка: {u1}-{v1} x {u2}-{v2} = {p}")
+                    if verbose:
+                        print(f"Intersection: {u1}-{v1} x {u2}-{v2} = {p}")
                     split_edge(G_proc, u1, v1, p, d1['wall_id'], '_A')
                     split_edge(G_proc, u2, v2, p, d2['wall_id'], '_B')
                     intersections_found = True
-                    break 
+                    break
 
-            if intersections_found: 
+            if intersections_found:
                 break
-        
-        if not intersections_found: 
+
+        if not intersections_found:
             break
-    
+
     return G_proc
 
-def process_t_joints(G: nx.Graph, tolerance: float = 50.0) -> nx.Graph:
+def process_t_joints(G: nx.Graph, tolerance: float = 50.0, verbose: bool = False) -> nx.Graph:
     """Find nodes that lie on edges from a different component (T-joints) and split."""
     G_proc = G.copy()
 
@@ -124,7 +125,6 @@ def process_t_joints(G: nx.Graph, tolerance: float = 50.0) -> nx.Graph:
             for n in comp:
                 node_to_comp[n] = i
 
-        # Check all nodes against edges from different components
         for p in list(G_proc.nodes()):
             best_dist = tolerance
             best_edge = None
@@ -141,14 +141,15 @@ def process_t_joints(G: nx.Graph, tolerance: float = 50.0) -> nx.Graph:
                 if dist < best_dist:
                     d_to_u = ((proj[0]-u[0])**2 + (proj[1]-u[1])**2)**0.5
                     d_to_v = ((proj[0]-v[0])**2 + (proj[1]-v[1])**2)**0.5
-                    
+
                     if d_to_u > tolerance/2 and d_to_v > tolerance/2:
                         best_dist = dist
                         best_edge = (u, v, data)
 
             if best_edge is not None:
                 u, v, data = best_edge
-                print(f"T-joint: node {p} -> edge {u}-{v} (dist={best_dist:.1f}mm)")
+                if verbose:
+                    print(f"T-joint: node {p} -> edge {u}-{v} (dist={best_dist:.1f}mm)")
                 split_edge(G_proc, u, v, p, data['wall_id'], '_T')
                 found = True
                 break
@@ -272,100 +273,120 @@ def _walk_original_wall(G: nx.Graph, start: Point,
 
     return result
 
-# ДАННЫЕ
-x_start = [14975,14975,8500,10750,10375,25,14975,14975,13250,14975,13245,6700,14975,
-           14975,16845,18475,525,10750,18475,525,8125,8500,8500,8500,12000,14975,18525,
-           14975,21850,21850,18525,18525,14975,14975]
-y_start = [25,3375,6625,7250,7250,13400,25,20850,12000,12000,13875,25,8150,
-           6650,8150,12000,25,7250,6650,13400,11625,11625,13375,13375,13875,
-           13875,19100,13875,11875,12875,13609,20100,22410,21120]
-x_end = [7700,10375,8500,10750,10375,25,14975,25,10750,14975,9650,525,16015,18475,21850,
-         14250,525,9720,18475,25,8125,8125,8125,8500,12000,14975,14975,14245,21850,21850,
-         18525,21850,11771,14975]
-y_end = [25,3375,11625,12000,3375,20850,8500,20850,12000,9460,13875,25,8150,
-         6650,8150,12000,13400,7250,12000,13400,13375,11625,13375,15580,20850,
-         21004,19100,13875,6496,20100,20100,20100,22410,22410]
-wall_id = [2662653,2662654,2662660,2662663,2662665,2662676,2662684,2662693,
-           2662695,2662696,2662748,2662750,2662754,2662756,2848644,3095721,3153305,
-           3153524,3153680,3153785,3154057,3154296,3154367,3154565,3154788,3155014,
-           3155106,3155212,3155770,3155910,3155911,3155912,3156179,3156238]
+# Test data for visualization
+TEST_DATA = {
+    "x_start": [14975,14975,8500,10750,10375,25,14975,14975,13250,14975,13245,6700,14975,
+               14975,16845,18475,525,10750,18475,525,8125,8500,8500,8500,12000,14975,18525,
+               14975,21850,21850,18525,18525,14975,14975],
+    "y_start": [25,3375,6625,7250,7250,13400,25,20850,12000,12000,13875,25,8150,
+               6650,8150,12000,25,7250,6650,13400,11625,11625,13375,13375,13875,
+               13875,19100,13875,11875,12875,13609,20100,22410,21120],
+    "x_end": [7700,10375,8500,10750,10375,25,14975,25,10750,14975,9650,525,16015,18475,21850,
+             14250,525,9720,18475,25,8125,8125,8125,8500,12000,14975,14975,14245,21850,21850,
+             18525,21850,11771,14975],
+    "y_end": [25,3375,11625,12000,3375,20850,8500,20850,12000,9460,13875,25,8150,
+             6650,8150,12000,13400,7250,12000,13400,13375,11625,13375,15580,20850,
+             21004,19100,13875,6496,20100,20100,20100,22410,22410],
+    "wall_id": [2662653,2662654,2662660,2662663,2662665,2662676,2662684,2662693,
+               2662695,2662696,2662748,2662750,2662754,2662756,2848644,3095721,3153305,
+               3153524,3153680,3153785,3154057,3154296,3154367,3154565,3154788,3155014,
+               3155106,3155212,3155770,3155910,3155911,3155912,3156179,3156238],
+}
 
-zip_start = [(float(x), float(y)) for x, y in zip(x_start, y_start)]
-zip_end = [(float(x), float(y)) for x, y in zip(x_end, y_end)]
 
-G_original = nx.Graph()
-G_original.add_edges_from([(normalize_point(st), 
-                            normalize_point(end),
-                            {"wall_id": str(wid), 
-                             "original_wall_id": str(wid)
-                             }
-                             )
-                          for st, end, wid in zip(zip_start, zip_end, wall_id)])
+def create_test_graph() -> nx.Graph:
+    """Create graph from test data."""
+    x_start = TEST_DATA["x_start"]
+    y_start = TEST_DATA["y_start"]
+    x_end = TEST_DATA["x_end"]
+    y_end = TEST_DATA["y_end"]
+    wall_id = TEST_DATA["wall_id"]
 
-print("Исходный: компоненты =", nx.number_connected_components(G_original), 
-      "ребер =", G_original.number_of_edges())
+    zip_start = [(float(x), float(y)) for x, y in zip(x_start, y_start)]
+    zip_end = [(float(x), float(y)) for x, y in zip(x_end, y_end)]
 
-# Обработка
-G_cross = process_intersections(G_original)
-print("После пересечений: компоненты =", nx.number_connected_components(G_cross),
-      "ребер =", G_cross.number_of_edges())
+    G = nx.Graph()
+    G.add_edges_from([(normalize_point(st),
+                       normalize_point(end),
+                       {"wall_id": str(wid),
+                        "original_wall_id": str(wid)
+                        })
+                      for st, end, wid in zip(zip_start, zip_end, wall_id)])
+    return G
 
-G_merged = process_t_joints(G_cross)
-print("После T-joints: компоненты =", nx.number_connected_components(G_merged),
-      "ребер =", G_merged.number_of_edges())
 
-#pos для всех узлов
-pos = {node: node for node in set(G_original.nodes()) | set(G_merged.nodes())}
+def visualize_graph(G_original: nx.Graph, G_merged: nx.Graph,
+                    traversal: List, start_node: Point):
+    """Visualize original and merged graphs with traversal."""
+    pos = {node: node for node in set(G_original.nodes()) | set(G_merged.nodes())}
 
-start_node = choose_start_node(G_merged)
-print("Старт:", start_node, "degree =", G_merged.degree(start_node))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 9))
 
-traversal = traverse_walls(G_merged, start_node)
+    # Original graph
+    components = list(nx.connected_components(G_original))
+    colors = plt.cm.tab20(np.linspace(0,1,len(components)))
+    for i, comp in enumerate(components):
+        nx.draw(G_original.subgraph(comp), pos, ax=ax1, node_size=30,
+                node_color=colors[i], edge_color=colors[i], alpha=0.7)
+    ax1.set_title(f"Original graph ({len(components)} components)")
 
-all_original_ids = set()
-for u, v, d in G_merged.edges(data=True):
-    all_original_ids.add(d.get('original_wall_id', d['wall_id']))
+    # Merged graph + traversal
+    nx.draw(G_merged, pos, ax=ax2, node_size=40, node_color='lightblue',
+            edge_color='gray', alpha=0.5)
+    nx.draw_networkx_nodes(G_merged, pos, ax=ax2, nodelist=[start_node],
+                           node_color='red', node_size=200)
 
-covered_ids = set(wall for _, wall in traversal)
+    covered_ids = set(wall for _, wall in traversal)
+    for i, ((u,v),_) in enumerate(traversal):
+        nx.draw_networkx_edges(G_merged, pos, ax=ax2, edgelist=[(u,v)],
+                               edge_color='orange', width=3)
+        nx.draw_networkx_edge_labels(G_merged, pos, ax=ax2,
+                                    edge_labels={(u,v):str(i+1)}, font_size=7)
 
-print(f"\nОбход: {len(traversal)} записей, "
-      f"покрыто {len(covered_ids)}/{len(all_original_ids)} стен")
-for i, ((u,v), wall) in enumerate(traversal, 1):
-    print(f"{i}: {u}->{v} original_wall={wall}")
+    n_comp = nx.number_connected_components(G_merged)
+    ax2.set_title(f"Merged ({n_comp} comp.) + traversal ({len(covered_ids)} walls)")
 
-missing = all_original_ids - covered_ids
-if missing:
-    print(f"\nНе покрыты: {missing}")
-else:
-    print("\nВсе стены покрыты!")
+    for ax in [ax1, ax2]:
+        ax.axis('equal')
+    plt.tight_layout()
+    plt.show()
 
-# ===== визуализация =====
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(18, 9))
 
-# Исходный граф
-components = list(nx.connected_components(G_original))
-colors = plt.cm.tab20(np.linspace(0,1,len(components)))
-for i, comp in enumerate(components):
-    nx.draw(G_original.subgraph(comp), pos, ax=ax1, node_size=30, 
-            node_color=colors[i], edge_color=colors[i], alpha=0.7)
-ax1.set_title("Исходный граф (16 компонент)")
+if __name__ == "__main__":
+    # Create and process graph
+    G_original = create_test_graph()
+    print("Original: components =", nx.number_connected_components(G_original),
+          "edges =", G_original.number_of_edges())
 
-# Объединенный граф + обход
-nx.draw(G_merged, pos, ax=ax2, node_size=40, node_color='lightblue', 
-        edge_color='gray', alpha=0.5)
-nx.draw_networkx_nodes(G_merged, pos, ax=ax2, nodelist=[start_node], 
-                       node_color='red', node_size=200)
+    G_cross = process_intersections(G_original, verbose=True)
+    print("After intersections: components =", nx.number_connected_components(G_cross),
+          "edges =", G_cross.number_of_edges())
 
-for i, ((u,v),_) in enumerate(traversal):
-    nx.draw_networkx_edges(G_merged, pos, ax=ax2, edgelist=[(u,v)], 
-                           edge_color='orange', width=3)
-    nx.draw_networkx_edge_labels(G_merged, pos, ax=ax2, 
-                                edge_labels={(u,v):str(i+1)}, font_size=7)
+    G_merged = process_t_joints(G_cross, verbose=True)
+    print("After T-joints: components =", nx.number_connected_components(G_merged),
+          "edges =", G_merged.number_of_edges())
 
-n_comp = nx.number_connected_components(G_merged)
-ax2.set_title(f"После объединения ({n_comp} комп.) + обход ({len(covered_ids)} стен)")
+    start_node = choose_start_node(G_merged)
+    print("Start:", start_node, "degree =", G_merged.degree(start_node))
 
-for ax in [ax1, ax2]:
-    ax.axis('equal')
-plt.tight_layout()
-plt.show()
+    traversal = traverse_walls(G_merged, start_node)
+
+    all_original_ids = set()
+    for u, v, d in G_merged.edges(data=True):
+        all_original_ids.add(d.get('original_wall_id', d['wall_id']))
+
+    covered_ids = set(wall for _, wall in traversal)
+
+    print(f"\nTraversal: {len(traversal)} entries, "
+          f"covered {len(covered_ids)}/{len(all_original_ids)} walls")
+    for i, ((u,v), wall) in enumerate(traversal, 1):
+        print(f"{i}: {u}->{v} original_wall={wall}")
+
+    missing = all_original_ids - covered_ids
+    if missing:
+        print(f"\nNot covered: {missing}")
+    else:
+        print("\nAll walls covered!")
+
+    # Visualize
+    visualize_graph(G_original, G_merged, traversal, start_node)

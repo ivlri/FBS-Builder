@@ -4,14 +4,22 @@ Solver pipeline for multi-wall processing.
 Unlike BondingOptimizer (RL-based), this uses deterministic beam search solver.
 No bonding optimization needed - solver is deterministic, so we just propagate
 constraints between walls.
+
+Overhang system:
+- Exterior edges → 0mm overhang (blocks cannot hang off)
+- Interior joints → up to 500mm overhang
+- Door openings → up to 200mm overhang
+- Monolith → always 0mm overhang
 """
 
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
+import networkx as nx
 import numpy as np
 
 from src.solver.solver import FBSSolver, BlockType as SolverBlockType, WallInstance as SolverWall, Opening
 from src.builder.structures import WallInstance, GRID_STEP, BLOCK_TYPES, BlockType
+from src.planner.overhang import OverhangAnalyzer, WallOverhangConstraints, EdgeType
 
 
 @dataclass
@@ -22,6 +30,8 @@ class SolverResult:
     instances: Dict[int, Dict]
     stats: Dict
     blocked_mask: Optional[np.ndarray] = None  # For debugging
+    left_overhang_mm: int = 0
+    right_overhang_mm: int = 0
 
 
 @dataclass
@@ -39,11 +49,16 @@ class SolverPipeline:
     - bonding=0: block layers 0, 2, 4 (even 600mm layers)
     - bonding=1: block layers 1, 3, 5 (odd 600mm layers)
 
+    Overhang system:
+    - Uses OverhangAnalyzer to determine max overhang at each wall edge
+    - Exterior edges: 0mm, Interior joints: 500mm, Door openings: 200mm
+
     Flow:
     1. Process walls sequentially (left to right)
     2. For each wall:
        - Apply chess-pattern bonding at joints
        - Apply occupied cells from neighbors (prevent overlap)
+       - Determine overhang constraints from wall graph
        - Run solver with constraints
        - Extract right edge for next wall
     """
@@ -58,16 +73,72 @@ class SolverPipeline:
         self.row_height = row_height
         self.beam_width = beam_width
 
+        # Overhang analyzer (set via set_wall_graph)
+        self.overhang_analyzer: Optional[OverhangAnalyzer] = None
+
+        # Wall node mapping: wall_id -> (start_node, end_node)
+        self.wall_nodes: Dict[int, Tuple[Tuple[float, float], Tuple[float, float]]] = {}
+
         # Convert BLOCK_TYPES to solver format
         self.block_types = [
             SolverBlockType(id=bt.id, length=bt.length, height=bt.height)
             for bt in BLOCK_TYPES
         ]
 
+    def set_wall_graph(self, G: nx.Graph, wall_node_mapping: Optional[Dict] = None):
+        """
+        Initialize overhang analyzer with wall graph.
+
+        Args:
+            G: NetworkX graph from planer.py (after process_intersections and process_t_joints)
+            wall_node_mapping: Optional dict mapping wall_id -> (start_node, end_node)
+        """
+        self.overhang_analyzer = OverhangAnalyzer(G)
+        if wall_node_mapping:
+            self.wall_nodes = wall_node_mapping
+
+    def get_overhang_constraints(
+        self,
+        wall_id: int,
+        start_node: Optional[Tuple[float, float]] = None,
+        end_node: Optional[Tuple[float, float]] = None,
+    ) -> Tuple[int, int]:
+        """
+        Get overhang constraints for a wall.
+
+        Args:
+            wall_id: Wall identifier
+            start_node: Start point of wall (optional, uses wall_nodes mapping)
+            end_node: End point of wall (optional, uses wall_nodes mapping)
+
+        Returns:
+            (left_overhang_mm, right_overhang_mm)
+        """
+        if self.overhang_analyzer is None:
+            return (0, 0)
+
+        # Get nodes from mapping if not provided
+        if start_node is None or end_node is None:
+            if wall_id in self.wall_nodes:
+                start_node, end_node = self.wall_nodes[wall_id]
+            else:
+                return (0, 0)
+
+        # Analyze wall
+        constraints = self.overhang_analyzer.analyze_wall(
+            start_node, end_node, str(wall_id)
+        )
+
+        return (
+            constraints.left_edge.max_overhang_mm,
+            constraints.right_edge.max_overhang_mm,
+        )
+
     def solve_chain(
         self,
         walls: List[WallInstance],
         initial_bonding: int = 0,
+        openings_map: Optional[Dict[int, List]] = None,
     ) -> PipelineResult:
         """
         Solve chain of connected walls with chess-pattern bonding.
@@ -77,6 +148,7 @@ class SolverPipeline:
             initial_bonding: Starting bonding pattern (0 or 1)
                 0 = first wall blocks even layers (0,2,4) on right
                 1 = first wall blocks odd layers (1,3,5) on right
+            openings_map: Dict mapping wall_id -> list of Opening objects
 
         Returns:
             PipelineResult with all wall layouts
@@ -146,7 +218,13 @@ class SolverPipeline:
                             blocked[r, c] = True
 
             # Convert openings to solver format
-            solver_openings = self._convert_openings(wall)
+            wall_openings = None
+            if openings_map and wall.id in openings_map:
+                wall_openings = openings_map[wall.id]
+            solver_openings = self._convert_openings_list(wall_openings)
+
+            # Get overhang constraints
+            left_overhang_mm, right_overhang_mm = self.get_overhang_constraints(wall.id)
 
             # Create solver
             solver_wall = SolverWall(length=wall.length, height=wall.height)
@@ -157,6 +235,8 @@ class SolverPipeline:
                 grid_step=self.grid_step,
                 row_height=self.row_height,
                 beam_width=self.beam_width,
+                left_overhang_mm=left_overhang_mm,
+                right_overhang_mm=right_overhang_mm,
             )
 
             # Apply blocked zones
@@ -177,6 +257,8 @@ class SolverPipeline:
                 instances=instances,
                 stats=stats,
                 blocked_mask=blocked.copy(),
+                left_overhang_mm=left_overhang_mm,
+                right_overhang_mm=right_overhang_mm,
             )
 
             # Extract right edge for next wall
@@ -211,14 +293,13 @@ class SolverPipeline:
                     solver.blocked[r, c] = 1
                     solver.grid[r, c] = -1
 
-    def _convert_openings(self, wall: WallInstance) -> Optional[List[Opening]]:
-        """Convert WallInstance openings to solver Opening format."""
-        if not hasattr(wall, "openings") or not wall.openings:
+    def _convert_openings_list(self, openings: Optional[List]) -> Optional[List[Opening]]:
+        """Convert Opening objects to solver Opening format."""
+        if not openings:
             return None
 
         solver_openings = []
-        for op in wall.openings:
-            # Both use same format: center_x, center_y, width, height
+        for op in openings:
             solver_openings.append(Opening(
                 center_x=op.center_x,
                 center_y=op.center_y,
@@ -287,40 +368,67 @@ def normalize_instances(instances: Dict) -> Dict:
 
 def visualize_wall(result: SolverResult, wall: 'WallInstance', grid_step: int = 20) -> str:
     """
-    Create ASCII visualization of wall with blocked zones and blocks.
+    Create ASCII visualization of wall with blocked zones, blocks, and overhang.
 
     Legend:
         X = blocked (chess-pattern or occupied by neighbor)
         . = empty
         0 = monolith
         2-7 = FBS block type
+        < = left overhang (block hangs off left edge)
+        > = right overhang (block hangs off right edge)
+        | = wall boundary markers
     """
     grid = result.grid
     blocked = result.blocked_mask
     num_rows, num_cells = grid.shape
 
-    # Create type grid from instances
-    type_grid = np.zeros_like(grid)
+    # Find max overhang from instances
+    max_oh_left = 0
+    max_oh_right = 0
+    for inst in result.instances.values():
+        start = inst["start_cell"]
+        end = inst["end_cell"]
+        if start < 0:
+            max_oh_left = max(max_oh_left, -start)
+        if end > num_cells:
+            max_oh_right = max(max_oh_right, end - num_cells)
+
+    # Create extended type grid with offset for overhang visualization
+    offset = max_oh_left
+    extended_cells = max_oh_left + num_cells + max_oh_right
+    extended_type_grid = np.zeros((num_rows, extended_cells), dtype=int)
+
+    # Fill extended grid from instances
     for inst in result.instances.values():
         type_id = inst["type_id"]
         row = inst["row"]
         h_rows = inst.get("h_rows", 1)
-        start = inst["start_cell"]
-        end = inst["end_cell"]
-        type_grid[row:row+h_rows, start:end] = type_id if type_id > 0 else -2  # -2 for monolith display
+        start = inst["start_cell"] + offset  # Shift by offset
+        end = inst["end_cell"] + offset
+        # Clamp to valid range
+        start = max(0, start)
+        end = min(extended_cells, end)
+        extended_type_grid[row:row+h_rows, start:end] = type_id if type_id > 0 else -2
 
     lines = []
     lines.append(f"Wall {result.wall_id}: {wall.length}mm x {wall.height}mm")
     lines.append(f"Grid: {num_rows} rows x {num_cells} cells ({grid_step}mm/cell)")
+    if result.left_overhang_mm > 0 or result.right_overhang_mm > 0:
+        lines.append(f"Overhang limits: L={result.left_overhang_mm}mm R={result.right_overhang_mm}mm")
     lines.append("")
 
-    # Compress visualization: show every 10th cell or summarize
-    step = max(1, num_cells // 60)  # Max 60 chars wide
+    # Compress visualization: show every Nth cell
+    step = max(1, extended_cells // 70)  # Max ~70 chars wide
 
-    # Header with positions
+    # Header with positions (relative to wall, not extended grid)
     header = "     "
+    if max_oh_left > 0:
+        header += "|"  # Left wall boundary
     for c in range(0, num_cells, step * 10):
         header += f"{c:<10}"
+    if max_oh_right > 0:
+        header += "|"  # Right wall boundary marker
     lines.append(header)
 
     # Rows from top to bottom
@@ -328,24 +436,37 @@ def visualize_wall(result: SolverResult, wall: 'WallInstance', grid_step: int = 
         layer = row // 2
         row_str = f"R{row:02d} "
 
-        for c in range(0, num_cells, step):
-            if blocked is not None and blocked[row, c]:
-                row_str += "X"
-            elif grid[row, c] == -1:
-                row_str += "X"
-            elif grid[row, c] == 0:
-                row_str += "."
-            else:
-                t = type_grid[row, c]
-                if t == -2:
-                    row_str += "M"  # Monolith
-                elif t == 0:
-                    row_str += "M"
-                else:
-                    row_str += str(t % 10)
+        for c in range(0, extended_cells, step):
+            real_c = c - offset  # Position relative to wall
 
-        row_str += f" | L{layer}"
-        lines.append(row_str)
+            if real_c < 0:
+                # Left overhang zone
+                t = extended_type_grid[row, c]
+                row_str += "<" if t != 0 else " "
+            elif real_c >= num_cells:
+                # Right overhang zone
+                t = extended_type_grid[row, c]
+                row_str += ">" if t != 0 else " "
+            else:
+                # Inside wall - existing logic
+                if blocked is not None and blocked[row, real_c]:
+                    row_str += "X"
+                elif grid[row, real_c] == -1:
+                    row_str += "X"
+                elif grid[row, real_c] == 0:
+                    row_str += "."
+                else:
+                    t = extended_type_grid[row, c]
+                    if t == -2:
+                        row_str += "M"  # Monolith
+                    elif t == 0:
+                        row_str += "."
+                    else:
+                        row_str += str(t % 10)
+
+        # Add overhang info for this row if present
+        row_suffix = f" | L{layer}"
+        lines.append(row_str + row_suffix)
 
     # Blocked zones summary
     if blocked is not None:
