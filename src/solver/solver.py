@@ -1,8 +1,7 @@
-# fbs_solver_beam.py
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
-from dataclasses import dataclass
-from typing import List, Dict, Tuple, Optional
 
 
 @dataclass
@@ -27,7 +26,6 @@ class Opening:
 
 
 class FBSSolver:
-
     def __init__(
         self,
         wall: WallInstance,
@@ -40,7 +38,6 @@ class FBSSolver:
         left_overhang_mm: int = 0,
         right_overhang_mm: int = 0,
     ):
-
         self.wall = wall
         self.block_types = block_types
         self.grid_step = grid_step
@@ -48,7 +45,6 @@ class FBSSolver:
         self.min_seam_shift_ratio = min_seam_shift_ratio
         self.beam_width = beam_width
 
-        # Overhang limits in cells
         self.left_overhang_cells = left_overhang_mm // grid_step
         self.right_overhang_cells = right_overhang_mm // grid_step
         self.left_overhang_mm = left_overhang_mm
@@ -59,6 +55,7 @@ class FBSSolver:
 
         self.grid = np.zeros((self.num_rows, self.num_cells), dtype=np.int32)
         self.blocked = np.zeros_like(self.grid)
+        self.openings = openings or []
 
         if openings:
             self._apply_openings(openings)
@@ -66,17 +63,37 @@ class FBSSolver:
         self.instance_counter = 1
         self.instances: Dict[int, Dict] = {}
 
-        # Sort FBS blocks by length exclude monolith
-        self.fbs_blocks = sorted(
-            [bt for bt in block_types if bt.id != 0],
+        all_fbs = [bt for bt in block_types if bt.id != 0]
+        self.fbs_600 = sorted(
+            [bt for bt in all_fbs if bt.height == 600],
             key=lambda bt: bt.length,
-            reverse=True
+            reverse=True,
         )
+        self.fbs_300 = sorted(
+            [bt for bt in all_fbs if bt.height == 300],
+            key=lambda bt: bt.length,
+            reverse=True,
+        )
+        self.fbs_blocks = self.fbs_600
+
         self.monolith = next((bt for bt in block_types if bt.id == 0), None)
-        self.min_fbs_cells = min(bt.length for bt in self.fbs_blocks) // grid_step
+        self.min_fbs_cells = min(bt.length for bt in all_fbs) // grid_step
+
+    def _get_allowed_blocks(self, row: int) -> List[BlockType]:
+        """Get allowed FBS blocks. 300mm blocks only near openings (±1 row)."""
+        if not self.openings:
+            return self.fbs_600
+
+        for op in self.openings:
+            y0 = (op.center_y - op.height // 2) // self.row_height
+            y1 = (op.center_y + op.height // 2 + self.row_height - 1) // self.row_height
+
+            if y0 - 1 <= row <= y1:
+                return self.fbs_600 + self.fbs_300
+
+        return self.fbs_600
 
     def solve_wall(self):
-
         for row in range(self.num_rows):
             segments = self._get_free_segments(row)
             for start, end in segments:
@@ -85,116 +102,54 @@ class FBSSolver:
         return self.grid, self.instances
 
     # ============================================================
-    # Segmeng solver
+    # Segment solver
     # ============================================================
 
     def _solve_segment_smart(self, row: int, start: int, end: int):
         """
-        Solve segment with rules from fbs_builder:
-        1. First compute where FBS CAN fit (any FBS block can cover this cell)
+        Solve segment with rules:
+        1. Compute where FBS can fit
         2. Place FBS blocks using beam search
-        3. Monolith ONLY in cells where no FBS can fit
+        3. Monolith ONLY where no FBS can fit
         """
         segment_len = end - start
 
-        # If segment too small for any FBS, fill with monolith
         if segment_len < self.min_fbs_cells:
             self._fill_monolith(row, start, end)
             return
 
         fbs_can_fit = self._compute_fbs_coverage(row, start, end)
 
-        must_mono = ~fbs_can_fit
-
-        if not np.any(must_mono):
+        if np.all(fbs_can_fit):
             self._solve_segment_beam(row, start, end)
-            return
-        
-        self._solve_segment_mixed(row, start, end, fbs_can_fit)
-
-    def _can_fill_without_mono(self, row: int, start: int, end: int) -> bool:
-        """
-        Check if segment can be filled 100% with FBS blocks (no monolith needed).
-        Uses recursive check with memoization.
-        """
-        segment_len = end - start
-
-        if segment_len == 0:
-            return True
-
-        if segment_len < self.min_fbs_cells:
-            return False
-
-        # Try each FBS block at start position
-        for bt in self.fbs_blocks:
-            cells = bt.length // self.grid_step
-            h_rows = bt.height // self.row_height
-
-            if cells > segment_len:
-                continue
-            if row + h_rows > self.num_rows:
-                continue
-            if not self._check_empty(row, start, cells, h_rows):
-                continue
-            if not self._check_support(row, start, cells):
-                continue
-            if not self._check_seam(row, start, cells, bt.height):
-                continue
-
-            # This block fits at start - can we fill the rest?
-            remaining = segment_len - cells
-            
-            if remaining == 0:
-                return True
-            
-            if remaining >= self.min_fbs_cells:
-                if self._can_fill_without_mono(row, start + cells, end):
-                    return True
-
-        return False
+        else:
+            self._solve_segment_mixed(row, start, end, fbs_can_fit)
 
     def _compute_fbs_coverage(self, row: int, start: int, end: int) -> np.ndarray:
-        """
-        For each cell in [start, end), check if ANY FBS block placement
-        can cover this cell (respecting all constraints).
-        """
+        """Check which cells can be covered by ANY valid FBS placement."""
         segment_len = end - start
         can_fit = np.zeros(segment_len, dtype=bool)
 
-        for bt in self.fbs_blocks:
+        for bt in self._get_allowed_blocks(row):
             cells = bt.length // self.grid_step
             h_rows = bt.height // self.row_height
 
-            if cells > segment_len:
-                continue
-            if row + h_rows > self.num_rows:
+            if cells > segment_len or row + h_rows > self.num_rows:
                 continue
 
-            # Try all possible start positions for this block
             for pos in range(start, end - cells + 1):
-                if not self._check_empty(row, pos, cells, h_rows):
-                    continue
-                if not self._check_support(row, pos, cells):
-                    continue
-                if not self._check_seam(row, pos, cells, bt.height):
-                    continue
-
-                # This placement is valid - mark all covered cells
-                local_start = pos - start
-                local_end = local_start + cells
-                can_fit[local_start:local_end] = True
+                if self._is_valid_placement(row, pos, cells, h_rows, bt.height):
+                    local_start = pos - start
+                    can_fit[local_start : local_start + cells] = True
 
         return can_fit
 
-    def _solve_segment_mixed(self, row: int, start: int, end: int, fbs_can_fit: np.ndarray):
-        """
-        Solve segment with mixed FBS/mono zones.
-        First place monolith in must-mono zones, then beam search for FBS.
-        """
-        # contiguous mono zones at edges (where we must use monolith)
+    def _solve_segment_mixed(
+        self, row: int, start: int, end: int, fbs_can_fit: np.ndarray
+    ):
+        """Solve segment with mixed FBS/mono zones."""
         segment_len = end - start
 
-        # Place monolith at left edge if needed
         mono_left = 0
         while mono_left < segment_len and not fbs_can_fit[mono_left]:
             mono_left += 1
@@ -202,15 +157,16 @@ class FBSSolver:
         if mono_left > 0:
             self._fill_monolith(row, start, start + mono_left)
 
-        # Place monolith at right edge if needed
         mono_right = 0
-        while mono_right < segment_len - mono_left and not fbs_can_fit[segment_len - 1 - mono_right]:
+        while (
+            mono_right < segment_len - mono_left
+            and not fbs_can_fit[segment_len - 1 - mono_right]
+        ):
             mono_right += 1
 
         if mono_right > 0:
             self._fill_monolith(row, end - mono_right, end)
 
-        # Solve middle part with beam search
         new_start = start + mono_left
         new_end = end - mono_right
 
@@ -221,310 +177,273 @@ class FBSSolver:
                 self._fill_monolith(row, new_start, new_end)
 
     def _fill_monolith(self, row: int, start: int, end: int):
-        """Fill range with monolith."""
+        """Fill range with monolith, respecting edge rules."""
         for pos in range(start, end):
-            # Skip if already filled
             if self.grid[row, pos] != 0:
                 continue
 
-            # Don't place monolith at absolute wall start (pos 0) if no blocks to left
-            # and wall doesn't have blocked zone there
-            is_left_edge = pos == 0
-            is_right_edge = pos == self.num_cells - 1
-
-            # Check if there are blocks adjacent (then mono is OK as filler)
-            has_block_left = pos > 0 and self.grid[row, pos - 1] > 0
-            has_block_right = pos < self.num_cells - 1 and self.grid[row, pos + 1] > 0
-
-            has_blocked_at_pos = self.blocked[row, pos] == 1
-
-            # Allow monolith if:
-            # - Not at edge, OR
-            # - At edge but has adjacent block (filler), OR
-            # - At edge but has blocked zone (neighbor wall)
-            if is_left_edge and not has_block_right and not has_blocked_at_pos:
-                continue
-            if is_right_edge and not has_block_left and not has_blocked_at_pos:
+            if not self._can_place_mono_at(row, pos):
                 continue
 
             self._place_block(row, pos, 1, 1, 0)
 
+    def _can_place_mono_at(self, row: int, pos: int) -> bool:
+        """Check if monolith can be placed at position (edge rules)."""
+        is_left_edge = pos == 0
+        is_right_edge = pos == self.num_cells - 1
+
+        if not is_left_edge and not is_right_edge:
+            return True
+
+        has_block_left = pos > 0 and self.grid[row, pos - 1] > 0
+        has_block_right = pos < self.num_cells - 1 and self.grid[row, pos + 1] > 0
+        has_blocked = self.blocked[row, pos] == 1
+
+        if is_left_edge:
+            return has_block_right or has_blocked
+        if is_right_edge:
+            return has_block_left or has_blocked
+
+        return True
+
     # ============================================================
-    # BEAM SEARCH (for FBS-only segments)
+    # Beam search
     # ============================================================
 
     def _solve_segment_beam(self, row: int, start: int, end: int):
-        """Beam search for FBS blocks only (no monolith fallback)."""
-
-        # Mono penalty is low - we prefer fewer blocks over less monolith
-        # 1 block + monolith is better than 3 blocks (fewer crane lifts)
-        mono_pen_multiplier = 0.5
-
-        # Collect types already used in this wall (from previous rows)
-        used_types_wall = set()
-        for inst in self.instances.values():
-            if inst["type_id"] != 0:  # Exclude monolith
-                used_types_wall.add(inst["type_id"])
+        """Beam search for FBS blocks only."""
+        used_types_wall = {
+            inst["type_id"] for inst in self.instances.values() if inst["type_id"] != 0
+        }
 
         initial_state = {
             "pos": start,
             "placements": [],
             "score": 0,
-            "gaps": [], 
-            "types_used": set(used_types_wall)
+            "gaps": [],
+            "types_used": set(used_types_wall),
         }
 
         beam = [initial_state]
 
-        while True:
-            new_beam = []
-            finished = True
-
-            for state in beam:
-                pos = state["pos"]
-
-                if pos >= end:
-                    new_beam.append(state)
-                    continue
-
-                finished = False
-                placed_any = False
-
-                for bt in self.fbs_blocks:
-                    cells = bt.length // self.grid_step
-                    h_rows = bt.height // self.row_height
-
-                    if pos + cells > end:
-                        continue
-                    if row + h_rows > self.num_rows:
-                        continue
-                    if not self._check_empty(row, pos, cells, h_rows):
-                        continue
-                    if not self._check_support(row, pos, cells):
-                        continue
-                    if not self._check_seam(row, pos, cells, bt.height):
-                        continue
-
-                    # Small bonus for reusing same type small penalty for new type
-                    type_bonus = 5.0 if bt.id in state["types_used"] else -5.0
-                    new_types = state["types_used"] | {bt.id}
-
-                    # Check if this creates unfillable gap
-                    remaining = end - (pos + cells)
-                    if 0 < remaining < self.min_fbs_cells:
-                        # Check if gap would be at free edge (no neighbor wall)
-                        # Monolith at free edge is NOT allowed
-                        free_edge_gap = (
-                            end == self.num_cells and self.blocked[row, end - 1] == 0
-                        )
-                        if free_edge_gap:
-                            # Skip this placement - would create invalid mono at edge
-                            continue
-
-                        mono_pen = remaining * mono_pen_multiplier
-
-                        gap_types = new_types | {0}
-                        gap_type_pen = 0 if 0 in state["types_used"] else -5.0
-                        new_state = {
-                            "pos": end,  # Skip to end gap will be filled with mono
-                            "placements": state["placements"] + [(pos, cells, h_rows, bt.id)],
-                            "score": state["score"] + self._score_block(bt, cells) + type_bonus - mono_pen + gap_type_pen,
-                            "gaps": state["gaps"] + [(pos + cells, end)],
-                            "types_used": gap_types
-                        }
-                        new_beam.append(new_state)
-
-                    placed_any = True
-
-                    new_state = {
-                        "pos": pos + cells,
-                        "placements": state["placements"] + [(pos, cells, h_rows, bt.id)],
-                        "score": state["score"] + self._score_block(bt, cells) + type_bonus,
-                        "gaps": state["gaps"],
-                        "types_used": new_types
-                    }
-                    new_beam.append(new_state)
-
-                # If no FBS fits, try skipping one cell (will be mono later)
-                if not placed_any:
-                    # Check if skip would create mono at free edge
-                    left_free_edge = (
-                        pos == 0 and 
-                        self.blocked[row, 0] == 0
-                    )
-
-                    right_free_edge = (
-                        pos == self.num_cells - 1 and
-                        self.blocked[row, self.num_cells - 1] == 0
-                    )
-
-                    if left_free_edge or right_free_edge:
-                        continue
-
-                    skip_types = state["types_used"] | {0}
-                    skip_type_penalty = 0 if 0 in state["types_used"] else -10.0
-                    new_state = {
-                        "pos": pos + 1,
-                        "placements": state["placements"],
-                        "score": state["score"] - 5 + skip_type_penalty,  # Small penalty for mono cell
-                        "gaps": state["gaps"] + [(pos, pos + 1)],
-                        "types_used": skip_types
-                    }
-                    new_beam.append(new_state)
-
-            if finished:
-                break
-
-            # top-K states
-            new_beam.sort(key=lambda s: s["score"], reverse=True)
-            beam = new_beam[:self.beam_width]
-
-            # If beam is empty, all paths were filtered - fallback to monolith
+        while not all(s["pos"] >= end for s in beam):
+            beam = self._expand_beam(beam, row, start, end)
             if not beam:
                 self._fill_monolith(row, start, end)
                 return
 
-        # Pick best finished state
-        if not beam:
-            self._fill_monolith(row, start, end)
-            return
-
         best = max(beam, key=lambda s: s["score"])
+        self._apply_solution(row, best)
 
-        # Place FBS blocks
-        for pos, cells, h_rows, type_id in best["placements"]:
+    def _expand_beam(
+        self, beam: List[Dict], row: int, start: int, end: int
+    ) -> List[Dict]:
+        """Expand beam by one step."""
+        new_beam = []
+
+        for state in beam:
+            pos = state["pos"]
+
+            if pos >= end:
+                new_beam.append(state)
+                continue
+
+            placed = self._try_place_fbs(state, row, pos, end)
+            new_beam.extend(placed)
+
+            if not placed:
+                skipped = self._try_skip_cell(state, row, pos)
+                if skipped:
+                    new_beam.append(skipped)
+
+        new_beam.sort(key=lambda s: s["score"], reverse=True)
+        return new_beam[: self.beam_width]
+
+    def _try_place_fbs(self, state: Dict, row: int, pos: int, end: int) -> List[Dict]:
+        """Try placing all possible FBS blocks at position."""
+        new_states = []
+
+        for bt in self._get_allowed_blocks(row):
+            cells = bt.length // self.grid_step
+            h_rows = bt.height // self.row_height
+
+            if pos + cells > end or row + h_rows > self.num_rows:
+                continue
+
+            if not self._is_valid_placement(row, pos, cells, h_rows, bt.height):
+                continue
+
+            new_state = self._create_placement_state(state, bt, pos, cells, h_rows, end)
+            if new_state:
+                new_states.append(new_state)
+
+        return new_states
+
+    def _create_placement_state(
+        self, state: Dict, bt: BlockType, pos: int, cells: int, h_rows: int, end: int
+    ) -> Optional[Dict]:
+        """Create new state for FBS placement."""
+        remaining = end - (pos + cells)
+
+        if 0 < remaining < self.min_fbs_cells:
+            if not self._can_fill_gap_with_mono(pos + cells, end):
+                return None
+
+            gap_score = self._compute_gap_score(state, remaining)
+            return {
+                "pos": end,
+                "placements": state["placements"] + [(pos, cells, h_rows, bt.id)],
+                "score": state["score"]
+                + self._score_block(bt, cells)
+                + self._type_score(bt.id, state)
+                + gap_score,
+                "gaps": state["gaps"] + [(pos + cells, end)],
+                "types_used": state["types_used"] | {bt.id, 0},
+            }
+
+        return {
+            "pos": pos + cells,
+            "placements": state["placements"] + [(pos, cells, h_rows, bt.id)],
+            "score": state["score"]
+            + self._score_block(bt, cells)
+            + self._type_score(bt.id, state),
+            "gaps": state["gaps"],
+            "types_used": state["types_used"] | {bt.id},
+        }
+
+    def _can_fill_gap_with_mono(self, gap_start: int, gap_end: int) -> bool:
+        """Check if gap at edge can be filled with monolith."""
+        row = 0
+
+        if gap_end == self.num_cells and self.blocked[row, gap_end - 1] == 0:
+            return False
+
+        return True
+
+    def _compute_gap_score(self, state: Dict, gap_size: int) -> float:
+        """Compute score penalty for monolith gap."""
+        mono_penalty = gap_size * 0.5
+        type_penalty = 0 if 0 in state["types_used"] else -5.0
+        return -mono_penalty + type_penalty
+
+    def _type_score(self, type_id: int, state: Dict) -> float:
+        """Bonus for reusing types."""
+        return 5.0 if type_id in state["types_used"] else -5.0
+
+    def _try_skip_cell(self, state: Dict, row: int, pos: int) -> Optional[Dict]:
+        """Try skipping one cell (will be monolith)."""
+        if not self._can_place_mono_at(row, pos):
+            return None
+
+        skip_penalty = -5 if 0 in state["types_used"] else -15
+        return {
+            "pos": pos + 1,
+            "placements": state["placements"],
+            "score": state["score"] + skip_penalty,
+            "gaps": state["gaps"] + [(pos, pos + 1)],
+            "types_used": state["types_used"] | {0},
+        }
+
+    def _apply_solution(self, row: int, solution: Dict):
+        """Apply beam search solution to grid."""
+        for pos, cells, h_rows, type_id in solution["placements"]:
             self._place_block(row, pos, cells, h_rows, type_id)
 
-        # Fill gaps with monolith
-        for gap_start, gap_end in best["gaps"]:
+        for gap_start, gap_end in solution["gaps"]:
             self._fill_monolith(row, gap_start, gap_end)
 
     # ============================================================
-    # Score
+    # Scoring
     # ============================================================
 
     def _score_block(self, bt: BlockType, cells: int) -> float:
         """
-        Score prioritizes:
-        1. Fewer blocks (each block = crane lift = expensive)
-        2. Larger blocks when count is same
-        3. 600mm blocks preferred (cover 2 rows with 1 crane lift)
-        4. Monolith is OK if it reduces block count
-
-        Trade-off example:
-        - 3x ФБС-9 (900mm) = 3 blocks, 0 mono → 3 crane lifts
-        - 1x ФБС-24 (2400mm) + 300mm mono = 1 block → 1 crane lift
-
-        We prefer 1 large block + monolith over 3 small blocks.
+        Score prioritizes fewer blocks (crane lifts):
+        - 1 large block + monolith better than 3 small blocks
         """
         if bt.id == 0:
-            # Monolith: very small penalty (no crane needed)
             return -0.5 * cells
 
-        # Heavy penalty per block (crane lift cost)
         block_penalty = 50
-        # Small bonus for larger blocks (same lift, more coverage)
         size_bonus = cells * 1.0
-        # Bonus for 600mm blocks: 1 crane lift covers 2 rows
-        # Without this, solver may prefer 2x300mm over 1x600mm
         height_bonus = 30 if bt.height == 600 else 0
 
         return size_bonus - block_penalty + height_bonus
 
     # ============================================================
-    # Checks
+    # Validation checks
     # ============================================================
 
+    def _is_valid_placement(
+        self, row: int, start: int, cells: int, h_rows: int, block_height: int
+    ) -> bool:
+        """Check if placement satisfies all constraints."""
+        return (
+            self._check_empty(row, start, cells, h_rows)
+            and self._check_support(row, start, cells)
+            and self._check_seam(row, start, cells, block_height)
+        )
+
     def _check_empty(self, row: int, start: int, cells: int, h_rows: int) -> bool:
-        return np.all(self.grid[row:row + h_rows, start:start + cells] == 0)
+        return np.all(self.grid[row : row + h_rows, start : start + cells] == 0)
 
     def _check_support(self, row: int, start: int, cells: int) -> bool:
         if row == 0:
             return True
-        below = self.grid[row - 1, start:start + cells]
+        below = self.grid[row - 1, start : start + cells]
+
         return np.any(below != 0)
 
     def _check_seam(self, row: int, start: int, cells: int, block_height: int) -> bool:
+        """Check seam alignment constraint."""
         if row == 0:
             return True
 
         min_shift_mm = block_height * self.min_seam_shift_ratio
         min_shift_cells = int(min_shift_mm // self.grid_step)
-
         seams_below = self._find_seams(row - 1)
 
         left = start
         right = start + cells
 
         for seam in seams_below:
-            # Seams must NOT coincide and must be at least min_shift apart
-            dist_left = abs(seam - left)
-            dist_right = abs(seam - right)
-
-            # Exact match (dist=0) is violation, close match (dist < min_shift) is also violation
-            if dist_left < min_shift_cells:
-                return False
-            if dist_right < min_shift_cells:
+            if (
+                abs(seam - left) < min_shift_cells
+                or abs(seam - right) < min_shift_cells
+            ):
                 return False
 
         return True
 
     def _find_seams(self, row: int) -> List[int]:
-        """Find block boundaries, ignoring monolith cells."""
+        """Find block boundaries, ignoring monolith."""
         seams = []
         for i in range(self.num_cells - 1):
             id_left = self.grid[row, i]
             id_right = self.grid[row, i + 1]
 
-            # Skip if either is empty or blocked
-            if id_left <= 0 or id_right <= 0:
+            if id_left <= 0 or id_right <= 0 or id_left == id_right:
                 continue
 
-            # Skip if same block
-            if id_left == id_right:
-                continue
-
-            # Check if both are monolith (type_id = 0) - ignore boundaries between monolith
             type_left = self.instances.get(id_left, {}).get("type_id", -1)
             type_right = self.instances.get(id_right, {}).get("type_id", -1)
 
             if type_left == 0 and type_right == 0:
-                continue  # Both monolith - not a real seam
+                continue
 
             seams.append(i + 1)
 
         return seams
 
     # ============================================================
-    # P;ace
+    # Placement
     # ============================================================
 
-    def _place_block(
-        self,
-        row: int,
-        start: int,
-        cells: int,
-        h_rows: int,
-        type_id: int,
-        overhang_left: int = 0,
-        overhang_right: int = 0,
-    ):
-        """
-        Place a block on the grid.
-
-        Args:
-            row: Starting row
-            start: Starting cell (can be negative for left overhang)
-            cells: Block length in cells
-            h_rows: Block height in rows
-            type_id: Block type ID
-            overhang_left: Cells hanging off left edge (negative start)
-            overhang_right: Cells hanging off right edge (end > num_cells)
-        """
+    def _place_block(self, row: int, start: int, cells: int, h_rows: int, type_id: int):
+        """Place block on grid."""
         inst_id = self.instance_counter
         self.instance_counter += 1
 
-        # Compute actual overhang
         actual_overhang_left = max(0, -start)
         actual_overhang_right = max(0, (start + cells) - self.num_cells)
 
@@ -538,11 +457,10 @@ class FBSSolver:
             "overhang_right_mm": actual_overhang_right * self.grid_step,
         }
 
-        # Only write to grid within bounds
         grid_start = max(0, start)
         grid_end = min(self.num_cells, start + cells)
         if grid_start < grid_end:
-            self.grid[row:row + h_rows, grid_start:grid_end] = inst_id
+            self.grid[row : row + h_rows, grid_start:grid_end] = inst_id
 
     # ============================================================
     # Openings
@@ -553,13 +471,16 @@ class FBSSolver:
             x0 = max(0, (op.center_x - op.width // 2) // self.grid_step)
             x1 = min(self.num_cells, (op.center_x + op.width // 2) // self.grid_step)
             y0 = max(0, (op.center_y - op.height // 2) // self.row_height)
-            y1 = min(self.num_rows,
-                     (op.center_y + op.height // 2 + self.row_height - 1) // self.row_height)
+            y1 = min(
+                self.num_rows,
+                (op.center_y + op.height // 2 + self.row_height - 1) // self.row_height,
+            )
 
             self.blocked[y0:y1, x0:x1] = 1
             self.grid[y0:y1, x0:x1] = -1
 
     def _get_free_segments(self, row: int) -> List[Tuple[int, int]]:
+        """Get continuous free segments in row."""
         segments = []
         in_seg = False
         seg_start = 0

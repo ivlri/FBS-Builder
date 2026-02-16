@@ -175,6 +175,23 @@ class WallPlanner:
 
         return adjacency
 
+    def _build_point_to_walls_map(self) -> Dict[Point, Set[int]]:
+        """Build mapping from points to wall IDs that touch them."""
+        point_to_walls: Dict[Point, Set[int]] = {}
+
+        for wall in self.wall_data.values():
+            for pt in [wall.start_point, wall.end_point]:
+                point_to_walls.setdefault(pt, set()).add(wall.wall_id)
+
+        # Include points from processed graph (handles T-joints)
+        if self.processed_graph:
+            for u, v, data in self.processed_graph.edges(data=True):
+                orig_id = int(data.get('original_wall_id', data['wall_id']))
+                for pt in [u, v]:
+                    point_to_walls.setdefault(pt, set()).add(orig_id)
+
+        return point_to_walls
+
     def get_adjacency_from_graph(self) -> Dict[int, List[int]]:
         """
         Get adjacency from actual graph structure (handles branches).
@@ -184,22 +201,7 @@ class WallPlanner:
         if self.processed_graph is None:
             return {}
 
-        # Map points to original wall IDs
-        point_to_walls: Dict[Point, Set[int]] = {}
-
-        for wall in self.wall_data.values():
-            for pt in [wall.start_point, wall.end_point]:
-                if pt not in point_to_walls:
-                    point_to_walls[pt] = set()
-                point_to_walls[pt].add(wall.wall_id)
-
-        # Also include points from processed graph
-        for u, v, data in self.processed_graph.edges(data=True):
-            orig_id = int(data.get('original_wall_id', data['wall_id']))
-            for pt in [u, v]:
-                if pt not in point_to_walls:
-                    point_to_walls[pt] = set()
-                point_to_walls[pt].add(orig_id)
+        point_to_walls = self._build_point_to_walls_map()
 
         # Build adjacency: walls sharing a point are adjacent
         adjacency: Dict[int, List[int]] = {w.wall_id: [] for w in self.wall_data.values()}
@@ -215,9 +217,62 @@ class WallPlanner:
 
         return adjacency
 
+    def _get_edge_neighbors(self, wall_id: int) -> Tuple[Optional[int], Optional[int]]:
+        """
+        Find neighbor thickness start and emd edges.
+
+        Returns:
+            (start_neighbor_thickness, end_neighbor_thickness) in mm
+            None if no neighbor at that edge
+        """
+        wall = self.wall_data[wall_id]
+        point_to_walls = self._build_point_to_walls_map()
+
+        start_walls = point_to_walls.get(wall.start_point, set()) - {wall_id}
+        end_walls = point_to_walls.get(wall.end_point, set()) - {wall_id}
+
+        start_thickness = None
+        end_thickness = None
+
+        if start_walls:
+            neighbor_id = next(iter(start_walls))
+            start_thickness = self.wall_data[neighbor_id].weight
+
+        if end_walls:
+            neighbor_id = next(iter(end_walls))
+            end_thickness = self.wall_data[neighbor_id].weight
+
+        return start_thickness, end_thickness
+
+    def _compute_adjusted_length(self, wall_id: int) -> int:
+        """
+        Compute wall length adjusted for neighbor thickness at edges
+
+        Central line length + neighbor_thickness/2 for each end with neighbor
+        Result rounded down to grid_step
+        """
+        wall = self.wall_data[wall_id]
+        base_length = wall.length
+
+        start_thick, end_thick = self._get_edge_neighbors(wall_id)
+
+        adjustment = 0
+        if start_thick is not None:
+            adjustment += start_thick // 2
+
+        if end_thick is not None:
+            adjustment += end_thick // 2
+
+        adj = base_length + adjustment
+
+        # Round down to grid_step
+        adj = (adj // self.grid_step) * self.grid_step
+
+        return adj
+
     def get_wall_instances(self) -> List[WallInstance]:
         """
-        Get WallInstance objects in traversal order.
+        Get WallInstance objects in traversal order
 
         Returns:
             List of WallInstance ready for BondingOptimizer
@@ -228,9 +283,10 @@ class WallPlanner:
         for wall_id in order:
             wall_data = self.wall_data.get(wall_id)
             if wall_data:
+                adjusted_length = self._compute_adjusted_length(wall_id)
                 instance = WallInstance(
                     id=wall_data.wall_id,
-                    length=wall_data.length,
+                    length=adjusted_length,
                     height=wall_data.height,
                     weight=wall_data.weight,
                     grid_step=self.grid_step,

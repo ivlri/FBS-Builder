@@ -1,8 +1,9 @@
-from typing import Dict, List, Tuple, Optional, Set, Any
-from itertools import product
 from dataclasses import dataclass
-import numpy as np
+from itertools import product
+from typing import Any, Dict, List, Optional, Set, Tuple
+
 import networkx as nx
+import numpy as np
 
 from src.builder.structures import WallInstance
 from src.contextbuilder.contextbuilder import ContextBuilder
@@ -12,6 +13,7 @@ from src.runner.ModelRunner import ModelRunner
 @dataclass
 class WallResult:
     """Result of RL inference for a single wall."""
+
     wall_id: int
     grid: np.ndarray
     instances: Dict[str, Dict]
@@ -22,6 +24,7 @@ class WallResult:
 @dataclass
 class OptimizationResult:
     """Result of bonding optimization."""
+
     bonding_assignments: Dict[Tuple[int, int], int]  # (wall_i, wall_j) -> bonding_type
     wall_results: Dict[int, WallResult]  # wall_id -> result
     total_score: float
@@ -101,7 +104,9 @@ class BondingOptimizer:
 
         if len(walls) == 1:
             result = self._run_inference(walls[0], None, None, None, None)
-            return OptimizationResult({}, {walls[0].id: result}, result.quality_score, 1)
+            return OptimizationResult(
+                {}, {walls[0].id: result}, result.quality_score, 1
+            )
 
         n_joints = len(walls) - 1
         best_result = None
@@ -139,8 +144,11 @@ class BondingOptimizer:
 
                 # Run inference
                 result = self._run_inference(
-                    wall, left_wall, right_wall,
-                    bonding_left, bonding_right,
+                    wall,
+                    left_wall,
+                    right_wall,
+                    bonding_left,
+                    bonding_right,
                     left_occupied=left_occupied,
                 )
 
@@ -152,7 +160,7 @@ class BondingOptimizer:
                     next_wall_thickness = walls[i + 1].weight
                     width_cells = next_wall_thickness // self.context_builder.grid_step
                     left_occupied = self.context_builder.extract_edge_occupied(
-                        result.grid, 'right', width_cells
+                        result.grid, "right", width_cells
                     )
                 else:
                     left_occupied = None
@@ -250,28 +258,25 @@ class BondingOptimizer:
                 bonding_right = None
 
                 result = self._run_inference(
-                    wall, left_wall, right_wall,
-                    incoming_bonding, bonding_right
+                    wall, left_wall, right_wall, incoming_bonding, bonding_right
                 )
 
                 dp[cache_key] = (result.quality_score, {}, {node: result})
                 return dp[cache_key]
 
-            best_score = float('-inf')
+            best_score = float("-inf")
             best_assignments: Dict[Tuple[int, int], int] = {}
             best_results: Dict[int, WallResult] = {}
 
             # Try all combinations of outgoing bonding types
             for outgoing in product([0, 1], repeat=len(children)):
-
                 # For simplicity, use first child as "right" neighbor
                 right_wall = wall_map.get(children[0]) if children else None
                 bonding_right = outgoing[0] if children else None
 
                 # Run RL for current wall
                 result = self._run_inference(
-                    wall, left_wall, right_wall,
-                    incoming_bonding, bonding_right
+                    wall, left_wall, right_wall, incoming_bonding, bonding_right
                 )
                 wall_score = result.quality_score
 
@@ -298,7 +303,7 @@ class BondingOptimizer:
             return dp[cache_key]
 
         # Try both options for root (no incoming bonding, but may have outgoing)
-        best_overall = (float('-inf'), {}, {})
+        best_overall = (float("-inf"), {}, {})
 
         best_overall = solve(root, None, None)
 
@@ -354,44 +359,50 @@ class BondingOptimizer:
                         assignments, wall_id, neighbors[0] if neighbors else None
                     )
                     bonding_right = self._get_bonding(
-                        assignments, wall_id, neighbors[1] if len(neighbors) > 1 else None
+                        assignments,
+                        wall_id,
+                        neighbors[1] if len(neighbors) > 1 else None,
                     )
 
                     result = self._run_inference(
-                        wall, left_wall, right_wall,
-                        bonding_left, bonding_right
+                        wall, left_wall, right_wall, bonding_left, bonding_right
                     )
 
                     new_results = {**results, wall_id: result}
-                    candidates.append((assignments.copy(), score + result.quality_score, new_results))
+                    candidates.append(
+                        (assignments.copy(), score + result.quality_score, new_results)
+                    )
                 else:
                     # Try all bonding combinations for undecided joints
                     for bondings in product([0, 1], repeat=len(undecided_joints)):
                         new_assignments = assignments.copy()
-                        for (neighbor, joint), bonding in zip(undecided_joints, bondings):
+                        for (neighbor, joint), bonding in zip(
+                            undecided_joints, bondings
+                        ):
                             new_assignments[joint] = bonding
 
                         left_wall, right_wall = self._get_neighbors(
                             wall_id, neighbors, wall_map
                         )
                         bonding_left = self._get_bonding(
-                            new_assignments, wall_id, neighbors[0] if neighbors else None
+                            new_assignments,
+                            wall_id,
+                            neighbors[0] if neighbors else None,
                         )
                         bonding_right = self._get_bonding(
-                            new_assignments, wall_id, neighbors[1] if len(neighbors) > 1 else None
+                            new_assignments,
+                            wall_id,
+                            neighbors[1] if len(neighbors) > 1 else None,
                         )
 
                         result = self._run_inference(
-                            wall, left_wall, right_wall,
-                            bonding_left, bonding_right
+                            wall, left_wall, right_wall, bonding_left, bonding_right
                         )
 
                         new_results = {**results, wall_id: result}
-                        candidates.append((
-                            new_assignments,
-                            score + result.quality_score,
-                            new_results
-                        ))
+                        candidates.append(
+                            (new_assignments, score + result.quality_score, new_results)
+                        )
 
                         # Mark joints as processed
                         for _, joint in undecided_joints:
@@ -399,7 +410,7 @@ class BondingOptimizer:
 
             # Keep top-k
             candidates.sort(key=lambda x: x[1], reverse=True)
-            beam = candidates[:self.beam_width]
+            beam = candidates[: self.beam_width]
 
         best = beam[0]
         return OptimizationResult(
@@ -450,17 +461,6 @@ class BondingOptimizer:
             right_occupied: Occupied cells from right neighbor's left edge
         """
         self.rl_call_count += 1
-
-        # Build context grid with specified bonding and occupied cells
-        context_grid = self.context_builder.build_grid_with_bonding(
-            wall=wall,
-            left_wall=left_wall,
-            right_wall=right_wall,
-            bonding_left=bonding_left,
-            bonding_right=bonding_right,
-            left_occupied=left_occupied,
-            right_occupied=right_occupied,
-        )
 
         # Create fake walls list and context_data for ModelRunner
         # This is a workaround until we refactor ModelRunner
@@ -533,9 +533,9 @@ class BondingOptimizer:
 
         # Weighted score
         score = (
-            100 * fbs_ratio           # Reward FBS usage
-            - 50 * monolith_ratio     # Penalize monolith
-            - 0.5 * seam_count        # Penalize many seams
+            100 * fbs_ratio  # Reward FBS usage
+            - 50 * monolith_ratio  # Penalize monolith
+            - 0.5 * seam_count  # Penalize many seams
             + result.get("reward", 0) / 10  # Include RL reward
         )
 

@@ -5,18 +5,22 @@ Tests demonstrate complete workflow from raw coordinates to solved walls.
 """
 
 import matplotlib
-matplotlib.use('Agg')
 
-import networkx as nx
-import numpy as np
-from typing import Tuple, Dict, List
+matplotlib.use("Agg")
+
 from collections import defaultdict
+from typing import Dict, List, Tuple
 
-from src.planner.overhang import OverhangAnalyzer, EdgeType
+import numpy as np
+
+from src.builder.structures import GRID_STEP, WallInstance
+from src.planner.overhang import EdgeType, OverhangAnalyzer
 from src.planner.wall_planner import WallPlanner
-from src.solver.solver_pipeline import SolverPipeline, visualize_pipeline, PipelineResult
-from src.builder.structures import WallInstance, GRID_STEP
-
+from src.solver.solver_pipeline import (
+    PipelineResult,
+    SolverPipeline,
+    visualize_pipeline,
+)
 
 Point = Tuple[float, float]
 
@@ -24,18 +28,6 @@ Point = Tuple[float, float]
 # ============================================================
 # VISUALIZATION HELPERS
 # ============================================================
-
-def normalize_instances(instances: Dict) -> Dict:
-    normalized = {}
-    for inst_id, inst in instances.items():
-        normalized[inst_id] = {
-            "row": inst["row"],
-            "start": inst["start_cell"],
-            "end": inst["end_cell"],
-            "h_rows": inst.get("h_rows", 1),
-            "type_id": inst["type_id"],
-        }
-    return normalized
 
 
 def _merge_consecutive(blocks: List[Dict]) -> List[Dict]:
@@ -102,6 +94,7 @@ def format_layers(instances: Dict, grid_step: int = 20) -> str:
 # HELPER FUNCTION
 # ============================================================
 
+
 def run_pipeline_test(
     x_start: List[float],
     y_start: List[float],
@@ -143,14 +136,16 @@ def run_pipeline_test(
     result = pipeline.solve_chain(walls)
 
     # 4. Visualize
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print(f"{test_name.upper()}")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
     print(f"Walls: {len(walls)}")
     print(f"Traversal order: {[w.id for w in walls]}")
     stats = planner.get_stats()
-    print(f"Graph: {stats['graph_nodes']} nodes, {stats['graph_edges']} edges, "
-          f"{stats['connected_components']} components")
+    print(
+        f"Graph: {stats['graph_nodes']} nodes, {stats['graph_edges']} edges, "
+        f"{stats['connected_components']} components"
+    )
     print(visualize_pipeline(result, walls, GRID_STEP))
     print(f"Total: {result.total_stats}")
 
@@ -160,6 +155,7 @@ def run_pipeline_test(
 # ============================================================
 # TESTS
 # ============================================================
+
 
 def test_simple_rectangle():
     """Simple rectangle: 4 walls forming closed contour."""
@@ -249,8 +245,10 @@ def test_free_edge():
 
     assert constraints.left_edge.edge_type == EdgeType.FREE_EDGE
     assert constraints.right_edge.edge_type == EdgeType.FREE_EDGE
-    print(f"  Overhang: L={constraints.left_edge.max_overhang_mm}mm, "
-          f"R={constraints.right_edge.max_overhang_mm}mm")
+    print(
+        f"  Overhang: L={constraints.left_edge.max_overhang_mm}mm, "
+        f"R={constraints.right_edge.max_overhang_mm}mm"
+    )
 
 
 def test_wall_with_opening():
@@ -283,9 +281,9 @@ def test_wall_with_opening():
     # Solve with opening
     result = pipeline.solve_chain(walls, openings_map={1: [opening]})
 
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print("WALL WITH OPENING TEST")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
     print(f"Opening: {opening}")
     print(visualize_pipeline(result, walls, GRID_STEP))
     print(f"Total: {result.total_stats}")
@@ -323,14 +321,16 @@ def test_real_data():
     assert result.total_stats["total_fbs"] > 0
 
     # Summary by wall
-    print(f"\n  Per-wall summary:")
+    print("\n  Per-wall summary:")
     for wall_id, wall_result in result.wall_results.items():
         stats = wall_result.stats
         oh_l = wall_result.left_overhang_mm
         oh_r = wall_result.right_overhang_mm
-        print(f"    Wall {wall_id}: {stats['fbs_count']} FBS, "
-              f"{stats['monolith_cells']*GRID_STEP}mm mono, "
-              f"overhang L={oh_l}mm R={oh_r}mm")
+        print(
+            f"    Wall {wall_id}: {stats['fbs_count']} FBS, "
+            f"{stats['monolith_cells'] * GRID_STEP}mm mono, "
+            f"overhang L={oh_l}mm R={oh_r}mm"
+        )
 
 
 def test_pipeline_with_overhang():
@@ -358,9 +358,9 @@ def test_pipeline_with_overhang():
     oh2 = pipeline.get_overhang_constraints(2)
     oh3 = pipeline.get_overhang_constraints(3)
 
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print("T-JUNCTION OVERHANG CONSTRAINTS")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
     print(f"  Wall 1: L={oh1[0]}mm R={oh1[1]}mm")
     print(f"  Wall 2: L={oh2[0]}mm R={oh2[1]}mm")
     print(f"  Wall 3: L={oh3[0]}mm R={oh3[1]}mm")
@@ -384,14 +384,26 @@ def test_overhang_visualization():
     num_cells = 100
     grid = np.zeros((num_rows, num_cells), dtype=int)
     grid[0:2, 10:70] = 1  # Block 1 inside wall
-    grid[2:4, 0:60] = 2   # Block 2 inside wall
+    grid[2:4, 0:60] = 2  # Block 2 inside wall
 
     # Instance with left overhang (start_cell = -10, so 10 cells overhang)
     # Instance with right overhang (end_cell = 110, so 10 cells overhang)
     instances = {
         1: {"row": 0, "start_cell": 10, "end_cell": 70, "h_rows": 2, "type_id": 2},
-        2: {"row": 2, "start_cell": -10, "end_cell": 60, "h_rows": 2, "type_id": 3},  # Left overhang
-        3: {"row": 4, "start_cell": 40, "end_cell": 110, "h_rows": 2, "type_id": 4},  # Right overhang
+        2: {
+            "row": 2,
+            "start_cell": -10,
+            "end_cell": 60,
+            "h_rows": 2,
+            "type_id": 3,
+        },  # Left overhang
+        3: {
+            "row": 4,
+            "start_cell": 40,
+            "end_cell": 110,
+            "h_rows": 2,
+            "type_id": 4,
+        },  # Right overhang
     }
 
     result = SolverResult(
@@ -404,19 +416,80 @@ def test_overhang_visualization():
         right_overhang_mm=200,
     )
 
-    wall = WallInstance(id=99, length=2000, height=1800, weight=300, grid_step=GRID_STEP)
+    wall = WallInstance(
+        id=99, length=2000, height=1800, weight=300, grid_step=GRID_STEP
+    )
 
     viz = visualize_wall(result, wall, GRID_STEP)
 
-    print(f"\n{'='*70}")
+    print(f"\n{'=' * 70}")
     print("OVERHANG VISUALIZATION TEST")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
     print(viz)
 
     # Check that < and > symbols appear
     assert "<" in viz, "Left overhang symbol '<' should appear in visualization"
     assert ">" in viz, "Right overhang symbol '>' should appear in visualization"
     print("\n  [OK] Overhang symbols < > correctly displayed")
+
+
+def test_adjusted_length():
+    """Test wall length adjustment for neighbors."""
+    # L-shape: two walls meeting at corner (both 300mm thick)
+    planner = WallPlanner(grid_step=GRID_STEP)
+    planner.add_walls_from_coords(
+        x_start=[0, 4000],
+        y_start=[0, 0],
+        x_end=[4000, 4000],
+        y_end=[0, 3000],
+        wall_ids=[1, 2],
+        weights=[300, 300],
+    )
+    planner.process()
+    walls = planner.get_wall_instances()
+
+    # Wall 1: 4000mm + 150mm (neighbor at END) = 4150mm -> 4140mm (rounded to 20)
+    # Wall 2: 3000mm + 150mm (neighbor at START) = 3150mm -> 3140mm (rounded to 20)
+    print(f"\n  Wall 1: base=4000mm, adjusted={walls[0].length}mm")
+    print(f"  Wall 2: base=3000mm, adjusted={walls[1].length}mm")
+
+    assert walls[0].length == 4140, f"Wall 1: expected 4140, got {walls[0].length}"
+    assert walls[1].length == 3140, f"Wall 2: expected 3140, got {walls[1].length}"
+
+    # Test wall with neighbors on BOTH ends (chain: wall2 - wall1 - wall3)
+    planner2 = WallPlanner(grid_step=GRID_STEP)
+    planner2.add_walls_from_coords(
+        x_start=[0, -2000, 4000],
+        y_start=[0, 0, 0],
+        x_end=[4000, 0, 6000],
+        y_end=[0, 0, 0],
+        wall_ids=[1, 2, 3],
+        weights=[300, 300, 300],
+    )
+    planner2.process()
+    walls2 = planner2.get_wall_instances()
+
+    # Find wall 1 in results (middle wall with neighbors at both ends)
+    wall1 = next(w for w in walls2 if w.id == 1)
+    # Wall 1: 4000mm + 150mm (start) + 150mm (end) = 4300mm
+    print(f"  Wall 1 (two neighbors): base=4000mm, adjusted={wall1.length}mm")
+    assert wall1.length == 4300, f"Wall 1: expected 4300, got {wall1.length}"
+
+    # Test single wall (no neighbors)
+    planner3 = WallPlanner(grid_step=GRID_STEP)
+    planner3.add_walls_from_coords(
+        x_start=[0],
+        y_start=[0],
+        x_end=[3000],
+        y_end=[0],
+        wall_ids=[1],
+    )
+    planner3.process()
+    walls3 = planner3.get_wall_instances()
+    print(f"  Single wall: base=3000mm, adjusted={walls3[0].length}mm (no change)")
+    assert walls3[0].length == 3000, (
+        f"Single wall: expected 3000, got {walls3[0].length}"
+    )
 
 
 # ============================================================
@@ -433,6 +506,7 @@ TESTS = {
     "overhang": ("Pipeline with Overhang", test_pipeline_with_overhang),
     "opening": ("Wall with Opening", test_wall_with_opening),
     "viz": ("Overhang Visualization", test_overhang_visualization),
+    "adjlen": ("Adjusted Length", test_adjusted_length),
 }
 
 
@@ -452,9 +526,9 @@ def run_tests(test_keys: List[str]) -> bool:
             continue
 
         name, test_func = TESTS[key]
-        print(f"\n{'='*70}")
+        print(f"\n{'=' * 70}")
         print(f"TEST: {name}")
-        print(f"{'='*70}")
+        print(f"{'=' * 70}")
         try:
             test_func()
             print(f"\n  [OK] PASSED")
@@ -465,6 +539,7 @@ def run_tests(test_keys: List[str]) -> bool:
         except Exception as e:
             print(f"\n  [ERR] ERROR: {e}")
             import traceback
+
             traceback.print_exc()
             failed += 1
 
@@ -496,7 +571,7 @@ if __name__ == "__main__":
                 free     - Free Edge (1 wall)
                 real     - Real Data (34 walls)
                 overhang - Pipeline with Overhang""",
-                    )
+    )
 
     args = parser.parse_args()
 
