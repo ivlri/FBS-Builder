@@ -1,29 +1,32 @@
-from typing import List, Dict, Tuple, Optional, Set
-from dataclasses import dataclass
 import math
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Set, Tuple
+
 import networkx as nx
 
+from src.builder.structures import GRID_STEP, WallInstance
+
 from .planer import (
+    Point,
+    choose_start_node,
     normalize_point,
     process_intersections,
     process_t_joints,
-    choose_start_node,
     traverse_walls,
-    Point,
 )
-from src.builder.structures import WallInstance, GRID_STEP
 
 
 @dataclass
 class WallData:
     """Raw wall data from external source (e.g., Revit)."""
+
     wall_id: int
     x_start: float
     y_start: float
     x_end: float
     y_end: float
     height: int = 1800
-    weight: int = 300 
+    weight: int = 300
 
     @property
     def length(self) -> int:
@@ -43,7 +46,6 @@ class WallData:
 
 @dataclass
 class TraversalItem:
-    """Single item in wall traversal order."""
     wall_id: int
     original_wall_id: int
     start_point: Point
@@ -52,18 +54,7 @@ class TraversalItem:
 
 
 class WallPlanner:
-    """
-    Plans wall construction order and builds adjacency graph.
-
-    Usage:
-        planner = WallPlanner()
-        planner.add_walls(wall_data_list)
-        planner.process()
-
-        order = planner.get_traversal_order()
-        adjacency = planner.get_adjacency()
-        walls = planner.get_wall_instances()
-    """
+    """Plans wall construction order and builds adjacency graph."""
 
     def __init__(self, grid_step: int = GRID_STEP):
         self.grid_step = grid_step
@@ -91,7 +82,7 @@ class WallPlanner:
         heights: Optional[List[int]] = None,
         weights: Optional[List[int]] = None,
     ) -> None:
-        """Add walls from coordinate arrays (like in planer.py)."""
+        """Add walls from coordinate arrays."""
         n = len(wall_ids)
         heights = heights or [1800] * n
         weights = weights or [300] * n
@@ -113,7 +104,12 @@ class WallPlanner:
         if not self.wall_data:
             raise ValueError("No walls added")
 
-        # Build initial graph
+        self._build_initial_graph()
+        self._process_graph_structure()
+        self._compute_traversal()
+
+    def _build_initial_graph(self):
+        """Build initial graph from wall data."""
         self.graph = nx.Graph()
         for wall in self.wall_data.values():
             self.graph.add_edge(
@@ -123,15 +119,16 @@ class WallPlanner:
                 original_wall_id=str(wall.wall_id),
             )
 
-        # Process intersections and T-joints
+    def _process_graph_structure(self):
+        """Process intersections and T-joints."""
         g_cross = process_intersections(self.graph)
         self.processed_graph = process_t_joints(g_cross)
 
-        # Compute traversal order
+    def _compute_traversal(self):
+        """Compute traversal order."""
         start_node = choose_start_node(self.processed_graph)
         raw_traversal = traverse_walls(self.processed_graph, start_node)
 
-        # Convert to TraversalItem list
         self.traversal = []
         seen_originals: Set[int] = set()
 
@@ -139,77 +136,52 @@ class WallPlanner:
             orig_id = int(orig_id_str)
             if orig_id not in seen_originals:
                 seen_originals.add(orig_id)
-                self.traversal.append(TraversalItem(
-                    wall_id=orig_id,
-                    original_wall_id=orig_id,
-                    start_point=u,
-                    end_point=v,
-                    order_index=len(self.traversal),
-                ))
+                self.traversal.append(
+                    TraversalItem(
+                        wall_id=orig_id,
+                        original_wall_id=orig_id,
+                        start_point=u,
+                        end_point=v,
+                        order_index=len(self.traversal),
+                    )
+                )
 
     def get_traversal_order(self) -> List[int]:
         """Get wall IDs in construction order."""
         return [item.wall_id for item in self.traversal]
 
     def get_adjacency(self) -> Dict[int, List[int]]:
-        """
-        Get adjacency dict for BondingOptimizer.
-
-        Returns:
-            Dict mapping wall_id -> [neighbor_ids] in traversal order
-        """
+        """Get adjacency dict (chain assumption)."""
         if not self.traversal:
             return {}
 
-        # Build adjacency from traversal order (chain assumption)
         adjacency: Dict[int, List[int]] = {}
         order = self.get_traversal_order()
 
         for i, wall_id in enumerate(order):
             neighbors = []
             if i > 0:
-                neighbors.append(order[i - 1])  # Previous wall
+                neighbors.append(order[i - 1])
             if i < len(order) - 1:
-                neighbors.append(order[i + 1])  # Next wall
+                neighbors.append(order[i + 1])
             adjacency[wall_id] = neighbors
 
         return adjacency
 
-    def _build_point_to_walls_map(self) -> Dict[Point, Set[int]]:
-        """Build mapping from points to wall IDs that touch them."""
-        point_to_walls: Dict[Point, Set[int]] = {}
-
-        for wall in self.wall_data.values():
-            for pt in [wall.start_point, wall.end_point]:
-                point_to_walls.setdefault(pt, set()).add(wall.wall_id)
-
-        # Include points from processed graph (handles T-joints)
-        if self.processed_graph:
-            for u, v, data in self.processed_graph.edges(data=True):
-                orig_id = int(data.get('original_wall_id', data['wall_id']))
-                for pt in [u, v]:
-                    point_to_walls.setdefault(pt, set()).add(orig_id)
-
-        return point_to_walls
-
     def get_adjacency_from_graph(self) -> Dict[int, List[int]]:
-        """
-        Get adjacency from actual graph structure (handles branches).
-
-        More accurate for T-joints and complex graphs.
-        """
+        """Get adjacency from graph structure (handles branches)."""
         if self.processed_graph is None:
             return {}
 
         point_to_walls = self._build_point_to_walls_map()
-
-        # Build adjacency: walls sharing a point are adjacent
-        adjacency: Dict[int, List[int]] = {w.wall_id: [] for w in self.wall_data.values()}
+        adjacency: Dict[int, List[int]] = {
+            w.wall_id: [] for w in self.wall_data.values()
+        }
 
         for pt, wall_ids in point_to_walls.items():
             wall_list = list(wall_ids)
             for i, w1 in enumerate(wall_list):
-                for w2 in wall_list[i + 1:]:
+                for w2 in wall_list[i + 1 :]:
                     if w2 not in adjacency.get(w1, []):
                         adjacency.setdefault(w1, []).append(w2)
                     if w1 not in adjacency.get(w2, []):
@@ -217,14 +189,60 @@ class WallPlanner:
 
         return adjacency
 
-    def _get_edge_neighbors(self, wall_id: int) -> Tuple[Optional[int], Optional[int]]:
-        """
-        Find neighbor thickness start and emd edges.
+    def _build_point_to_walls_map(self) -> Dict[Point, Set[int]]:
+        """Build mapping from points to wall IDs."""
+        point_to_walls: Dict[Point, Set[int]] = {}
 
-        Returns:
-            (start_neighbor_thickness, end_neighbor_thickness) in mm
-            None if no neighbor at that edge
-        """
+        for wall in self.wall_data.values():
+            for pt in [wall.start_point, wall.end_point]:
+                point_to_walls.setdefault(pt, set()).add(wall.wall_id)
+
+        if self.processed_graph:
+            for u, v, data in self.processed_graph.edges(data=True):
+                orig_id = int(data.get("original_wall_id", data["wall_id"]))
+                for pt in [u, v]:
+                    point_to_walls.setdefault(pt, set()).add(orig_id)
+
+        return point_to_walls
+
+    def get_wall_instances(self) -> List[WallInstance]:
+        """Get WallInstance objects in traversal order."""
+        order = self.get_traversal_order()
+        instances = []
+
+        for wall_id in order:
+            wall_data = self.wall_data.get(wall_id)
+            if wall_data:
+                adjusted_length = self._compute_adjusted_length(wall_id)
+                instance = WallInstance(
+                    id=wall_data.wall_id,
+                    length=adjusted_length,
+                    height=wall_data.height,
+                    weight=wall_data.weight,
+                    grid_step=self.grid_step,
+                )
+                instances.append(instance)
+
+        return instances
+
+    def _compute_adjusted_length(self, wall_id: int) -> int:
+        """Compute length adjusted for neighbor thickness."""
+        wall = self.wall_data[wall_id]
+        base_length = wall.length
+
+        start_thick, end_thick = self._get_edge_neighbors(wall_id)
+
+        adjustment = 0
+        if start_thick is not None:
+            adjustment += start_thick // 2
+        if end_thick is not None:
+            adjustment += end_thick // 2
+
+        adj = base_length + adjustment
+        return (adj // self.grid_step) * self.grid_step
+
+    def _get_edge_neighbors(self, wall_id: int) -> Tuple[Optional[int], Optional[int]]:
+        """Find neighbor thickness at edges. Returns (start, end) in mm."""
         wall = self.wall_data[wall_id]
         point_to_walls = self._build_point_to_walls_map()
 
@@ -244,70 +262,30 @@ class WallPlanner:
 
         return start_thickness, end_thickness
 
-    def _compute_adjusted_length(self, wall_id: int) -> int:
-        """
-        Compute wall length adjusted for neighbor thickness at edges
-
-        Central line length + neighbor_thickness/2 for each end with neighbor
-        Result rounded down to grid_step
-        """
-        wall = self.wall_data[wall_id]
-        base_length = wall.length
-
-        start_thick, end_thick = self._get_edge_neighbors(wall_id)
-
-        adjustment = 0
-        if start_thick is not None:
-            adjustment += start_thick // 2
-
-        if end_thick is not None:
-            adjustment += end_thick // 2
-
-        adj = base_length + adjustment
-
-        # Round down to grid_step
-        adj = (adj // self.grid_step) * self.grid_step
-
-        return adj
-
-    def get_wall_instances(self) -> List[WallInstance]:
-        """
-        Get WallInstance objects in traversal order
-
-        Returns:
-            List of WallInstance ready for BondingOptimizer
-        """
-        order = self.get_traversal_order()
-        instances = []
-
-        for wall_id in order:
-            wall_data = self.wall_data.get(wall_id)
-            if wall_data:
-                adjusted_length = self._compute_adjusted_length(wall_id)
-                instance = WallInstance(
-                    id=wall_data.wall_id,
-                    length=adjusted_length,
-                    height=wall_data.height,
-                    weight=wall_data.weight,
-                    grid_step=self.grid_step,
-                )
-                instances.append(instance)
-
-        return instances
-
     def get_stats(self) -> Dict:
-        """Get statistics about the wall graph."""
+        """Get statistics about wall graph."""
         return {
             "total_walls": len(self.wall_data),
             "traversal_length": len(self.traversal),
-            "graph_nodes": self.processed_graph.number_of_nodes() if self.processed_graph else 0,
-            "graph_edges": self.processed_graph.number_of_edges() if self.processed_graph else 0,
-            "connected_components": nx.number_connected_components(self.processed_graph) if self.processed_graph else 0,
+            "graph_nodes": self.processed_graph.number_of_nodes()
+            if self.processed_graph
+            else 0,
+            "graph_edges": self.processed_graph.number_of_edges()
+            if self.processed_graph
+            else 0,
+            "connected_components": (
+                nx.number_connected_components(self.processed_graph)
+                if self.processed_graph
+                else 0
+            ),
             "has_cycles": self._has_cycles(),
         }
 
     def _has_cycles(self) -> bool:
-        """Check if processed graph has cycles."""
+        """Check if graph has cycles."""
         if self.processed_graph is None:
             return False
-        return self.processed_graph.number_of_edges() >= self.processed_graph.number_of_nodes()
+        return (
+            self.processed_graph.number_of_edges()
+            >= self.processed_graph.number_of_nodes()
+        )
