@@ -16,7 +16,7 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 import networkx as nx
 import numpy as np
-
+from collections import defaultdict
 from src.solver.solver import FBSSolver, BlockType as SolverBlockType, WallInstance as SolverWall, Opening
 from src.builder.structures import WallInstance, GRID_STEP, BLOCK_TYPES, BlockType
 from src.planner.overhang import OverhangAnalyzer, WallOverhangConstraints, EdgeType
@@ -366,7 +366,7 @@ def normalize_instances(instances: Dict) -> Dict:
     return normalized
 
 
-def visualize_wall(result: SolverResult, wall: 'WallInstance', grid_step: int = 20) -> str:
+def visualize_wall(result: SolverResult, wall: WallInstance, grid_step: int = 20) -> str:
     """
     Create ASCII visualization of wall with blocked zones, blocks, and overhang.
 
@@ -419,16 +419,24 @@ def visualize_wall(result: SolverResult, wall: 'WallInstance', grid_step: int = 
     lines.append("")
 
     # Compress visualization: show every Nth cell
-    step = max(1, extended_cells // 70)  # Max ~70 chars wide
+    # step = max(1, extended_cells // 70)
+    step = 1
 
     # Header with positions (relative to wall, not extended grid)
+    # Header with fixed 10-cell ticks
     header = "     "
+
+    # Left boundary marker
     if max_oh_left > 0:
-        header += "|"  # Left wall boundary
-    for c in range(0, num_cells, step * 10):
-        header += f"{c:<10}"
+        header += "|"
+
+    for c in range(0, num_cells, 10):
+        pos_mm = c * grid_step
+        header += f"{pos_mm:<10}"
+
     if max_oh_right > 0:
-        header += "|"  # Right wall boundary marker
+        header += "|"
+
     lines.append(header)
 
     # Rows from top to bottom
@@ -488,6 +496,35 @@ def visualize_wall(result: SolverResult, wall: 'WallInstance', grid_step: int = 
 
             if left_blocked > 0 or right_blocked > 0:
                 lines.append(f"  L{layer}: left={left_blocked * grid_step}mm, right={right_blocked * grid_step}mm")
+
+        # === Layer block summary (Revit friendly, merged monolith) ===
+        from collections import defaultdict
+
+        layer_map = defaultdict(list)
+
+        for inst in result.instances.values():
+            layer = inst["row"] // 2
+            length_mm = (inst["end_cell"] - inst["start_cell"]) * grid_step
+            layer_map[layer].append((inst["type_id"], length_mm))
+
+        lines.append("")
+        lines.append("Layer summary:")
+
+        for layer in sorted(layer_map.keys()):
+            parts = []
+            mono_sum = 0
+
+            for type_id, length_mm in layer_map[layer]:
+                if type_id == 0:
+                    mono_sum += length_mm
+                else:
+                    parts.append(f"{type_id}({length_mm}mm)")
+
+            # Добавляем монолит одной строкой
+            if mono_sum > 0:
+                parts.append(f"0({mono_sum}mm)")
+
+            lines.append(f"  L{layer} | " + ", ".join(parts))
 
     return "\n".join(lines)
 

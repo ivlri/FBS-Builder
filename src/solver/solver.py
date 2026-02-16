@@ -143,10 +143,11 @@ class FBSSolver:
 
             # This block fits at start - can we fill the rest?
             remaining = segment_len - cells
+            
             if remaining == 0:
                 return True
+            
             if remaining >= self.min_fbs_cells:
-                # Recursively check remaining segment
                 if self._can_fill_without_mono(row, start + cells, end):
                     return True
 
@@ -257,7 +258,7 @@ class FBSSolver:
 
         # Mono penalty is low - we prefer fewer blocks over less monolith
         # 1 block + monolith is better than 3 blocks (fewer crane lifts)
-        mono_penalty_multiplier = 0.5
+        mono_pen_multiplier = 0.5
 
         # Collect types already used in this wall (from previous rows)
         used_types_wall = set()
@@ -304,30 +305,30 @@ class FBSSolver:
                     if not self._check_seam(row, pos, cells, bt.height):
                         continue
 
-                    # Small bonus for reusing same type, small penalty for new type
-                    # (secondary to block count optimization)
+                    # Small bonus for reusing same type small penalty for new type
                     type_bonus = 5.0 if bt.id in state["types_used"] else -5.0
                     new_types = state["types_used"] | {bt.id}
 
-                    # Check if this creates unfillable gap (will need monolith)
+                    # Check if this creates unfillable gap
                     remaining = end - (pos + cells)
                     if 0 < remaining < self.min_fbs_cells:
                         # Check if gap would be at free edge (no neighbor wall)
                         # Monolith at free edge is NOT allowed
-                        gap_at_free_edge = (end == self.num_cells and
-                                           self.blocked[row, end - 1] == 0)
-                        if gap_at_free_edge:
+                        free_edge_gap = (
+                            end == self.num_cells and self.blocked[row, end - 1] == 0
+                        )
+                        if free_edge_gap:
                             # Skip this placement - would create invalid mono at edge
                             continue
 
-                        mono_penalty = remaining * mono_penalty_multiplier
+                        mono_pen = remaining * mono_pen_multiplier
 
                         gap_types = new_types | {0}
-                        gap_type_penalty = 0 if 0 in state["types_used"] else -5.0
+                        gap_type_pen = 0 if 0 in state["types_used"] else -5.0
                         new_state = {
                             "pos": end,  # Skip to end gap will be filled with mono
                             "placements": state["placements"] + [(pos, cells, h_rows, bt.id)],
-                            "score": state["score"] + self._score_block(bt, cells) + type_bonus - mono_penalty + gap_type_penalty,
+                            "score": state["score"] + self._score_block(bt, cells) + type_bonus - mono_pen + gap_type_pen,
                             "gaps": state["gaps"] + [(pos + cells, end)],
                             "types_used": gap_types
                         }
@@ -347,11 +348,17 @@ class FBSSolver:
                 # If no FBS fits, try skipping one cell (will be mono later)
                 if not placed_any:
                     # Check if skip would create mono at free edge
-                    at_left_free_edge = (pos == 0 and self.blocked[row, 0] == 0)
-                    at_right_free_edge = (pos == self.num_cells - 1 and
-                                         self.blocked[row, self.num_cells - 1] == 0)
-                    if at_left_free_edge or at_right_free_edge:
-                        # Cannot place mono at free edge - this path is invalid
+                    left_free_edge = (
+                        pos == 0 and 
+                        self.blocked[row, 0] == 0
+                    )
+
+                    right_free_edge = (
+                        pos == self.num_cells - 1 and
+                        self.blocked[row, self.num_cells - 1] == 0
+                    )
+
+                    if left_free_edge or right_free_edge:
                         continue
 
                     skip_types = state["types_used"] | {0}
@@ -368,7 +375,7 @@ class FBSSolver:
             if finished:
                 break
 
-            # Keep top-K states
+            # top-K states
             new_beam.sort(key=lambda s: s["score"], reverse=True)
             beam = new_beam[:self.beam_width]
 
@@ -379,7 +386,6 @@ class FBSSolver:
 
         # Pick best finished state
         if not beam:
-            # No valid paths found - fill with monolith
             self._fill_monolith(row, start, end)
             return
 

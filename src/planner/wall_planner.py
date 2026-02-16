@@ -22,8 +22,8 @@ class WallData:
     y_start: float
     x_end: float
     y_end: float
-    height: int = 1800  # Default height in mm
-    weight: int = 300   # Default thickness in mm
+    height: int = 1800
+    weight: int = 300 
 
     @property
     def length(self) -> int:
