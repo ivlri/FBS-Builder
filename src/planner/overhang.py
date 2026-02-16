@@ -1,13 +1,3 @@
-"""
-Overhang detection for FBS walls.
-
-Determines max overhang based on edge type:
-- Exterior contour → 0mm
-- Interior joint → 500mm
-- Door opening → 200mm
-- Monolith → always 0mm
-"""
-
 from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, List, Optional, Set, Tuple

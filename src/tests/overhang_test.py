@@ -1,9 +1,3 @@
-"""
-Full pipeline tests: Points -> WallPlanner -> SolverPipeline -> Visualization.
-
-Tests demonstrate complete workflow from raw coordinates to solved walls.
-"""
-
 import matplotlib
 
 matplotlib.use("Agg")
