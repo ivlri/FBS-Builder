@@ -94,6 +94,10 @@ class FBSSolver:
         return self.fbs_600
 
     def solve_wall(self):
+        self._all_blocked_edges = set()
+        for r in range(self.num_rows):
+            self._all_blocked_edges.update(self._find_blocked_edges(r))
+
         for row in range(self.num_rows):
             segments = self._get_free_segments(row)
             for start, end in segments:
@@ -505,6 +509,7 @@ class FBSSolver:
             self._check_empty(row, start, cells, h_rows)
             and self._check_support(row, start, cells)
             and self._check_seam(row, start, cells, block_height)
+            and self._check_seam_vs_blocked(row, start, cells, block_height)
         )
 
     def _check_empty(self, row: int, start: int, cells: int, h_rows: int) -> bool:
@@ -537,6 +542,85 @@ class FBSSolver:
                 return False
 
         return True
+
+    def _check_seam_vs_blocked(
+        self, row: int, start: int, cells: int, block_height: int
+    ) -> bool:
+        """Check block edges aren't too close to blocked zone edges.
+        Skip check for edges that border blocked/empty zones (not real seams)."""
+        if not self._all_blocked_edges:
+            return True
+
+        min_shift_cells = int(
+            block_height * self.min_seam_shift_ratio // self.grid_step
+        )
+        left = start
+        right = start + cells
+
+        # Left edge is a seam if preceded by a non-monolith block
+        check_left = self._is_fbs_seam(row, left, side="left")
+        # Right edge: only check if there's room for an FBS block after it
+        check_right = self._has_fbs_room_after(row, right)
+
+        for edge in self._all_blocked_edges:
+            if check_left and abs(edge - left) < min_shift_cells:
+                return False
+            if check_right and abs(edge - right) < min_shift_cells:
+                return False
+        return True
+
+    def _has_fbs_room_after(self, row: int, pos: int) -> bool:
+        """Check if there's enough free space after pos for an FBS block."""
+        if pos >= self.num_cells:
+            return False
+        free = 0
+        for c in range(pos, self.num_cells):
+            if self.blocked[row, c] == 1 or self.grid[row, c] != 0:
+                break
+            free += 1
+        return free >= self.min_fbs_cells
+
+    def _is_fbs_seam(self, row: int, pos: int, side: str) -> bool:
+        """Check if pos is a seam between current block and an FBS block."""
+        if side == "left":
+            if pos == 0:
+                return False
+            adj_id = self.grid[row, pos - 1]
+        else:
+            if pos >= self.num_cells:
+                return False
+            adj_id = self.grid[row, pos]
+
+        if adj_id <= 0:
+            return False
+        return self.instances.get(adj_id, {}).get("type_id", -1) != 0
+
+    def _find_blocked_edges(self, row: int) -> List[int]:
+        """Find edges of mid-wall blocked zones (skip wall-edge blocked)."""
+        # Find blocked segments
+        segments = []
+        in_seg = False
+        seg_start = 0
+        for c in range(self.num_cells):
+            if self.blocked[row, c] == 1:
+                if not in_seg:
+                    seg_start = c
+                    in_seg = True
+            else:
+                if in_seg:
+                    segments.append((seg_start, c))
+                    in_seg = False
+        if in_seg:
+            segments.append((seg_start, self.num_cells))
+
+        # Only mid-wall segments (not touching wall edges)
+        edges = []
+        for seg_start, seg_end in segments:
+            if seg_start == 0 or seg_end == self.num_cells:
+                continue
+            edges.append(seg_start)
+            edges.append(seg_end)
+        return edges
 
     def _find_seams(self, row: int) -> List[int]:
         """Find block boundaries, ignoring monolith."""

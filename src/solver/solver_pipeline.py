@@ -325,7 +325,7 @@ class SolverPipeline:
         neighbor_result: Optional[SolverResult],
         bonding: int,
     ) -> None:
-        """Apply chess-pattern and occupied cells at T-junction offset."""
+        """Apply chess-pattern and seam margin at T-junction offset."""
         offset_cells = junc.offset_mm // self.grid_step
         width_cells = junc.neighbor_thickness_mm // self.grid_step
         half = width_cells // 2
