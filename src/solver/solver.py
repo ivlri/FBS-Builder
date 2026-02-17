@@ -172,7 +172,13 @@ class FBSSolver:
 
         if new_end > new_start:
             if new_end - new_start >= self.min_fbs_cells:
-                self._solve_segment_beam(row, new_start, new_end)
+                self._solve_segment_beam(
+                    row,
+                    new_start,
+                    new_end,
+                    has_mono_left=mono_left > 0,
+                    has_mono_right=mono_right > 0,
+                )
             else:
                 self._fill_monolith(row, new_start, new_end)
 
@@ -197,12 +203,10 @@ class FBSSolver:
 
         has_block_left = pos > 0 and self.grid[row, pos - 1] > 0
         has_block_right = pos < self.num_cells - 1 and self.grid[row, pos + 1] > 0
-        has_blocked = self.blocked[row, pos] == 1
-
         if is_left_edge:
-            return has_block_right or has_blocked
+            return has_block_right or self.blocked[row, pos] == 1
         if is_right_edge:
-            return has_block_left or has_blocked
+            return has_block_left or self.blocked[row, pos] == 1
 
         return True
 
@@ -210,13 +214,26 @@ class FBSSolver:
     # Beam search
     # ============================================================
 
-    def _solve_segment_beam(self, row: int, start: int, end: int):
+    def _solve_segment_beam(
+        self,
+        row: int,
+        start: int,
+        end: int,
+        has_mono_left: bool = False,
+        has_mono_right: bool = False,
+    ):
         """Beam search for FBS blocks only."""
         used_types_wall = {
             inst["type_id"] for inst in self.instances.values() if inst["type_id"] != 0
         }
 
-        initial_states = self._build_initial_states(row, start, end, used_types_wall)
+        initial_states = self._build_initial_states(
+            row,
+            start,
+            end,
+            used_types_wall,
+            has_mono_right,
+        )
         beam = initial_states
 
         while not all(s["pos"] >= end for s in beam):
@@ -229,7 +246,12 @@ class FBSSolver:
         self._apply_solution(row, best)
 
     def _build_initial_states(
-        self, row: int, start: int, end: int, used_types: set
+        self,
+        row: int,
+        start: int,
+        end: int,
+        used_types: set,
+        has_mono_right: bool = False,
     ) -> List[Dict]:
         """Build initial beam states, including left-gap option."""
         states = [
@@ -242,24 +264,54 @@ class FBSSolver:
             }
         ]
 
-        # If left edge is blocked, try starting with a gap
-        if start == 0 or self.blocked[row, start] == 1:
-            for gap_end in range(1, self.min_fbs_cells):
-                gap_pos = start + gap_end
+        # Skip left-gap when mono already placed on right (consolidate)
+        if has_mono_right:
+            return states
+
+        # Try starting with gap if left side has blocked neighbors
+        if self._has_blocked_near(start, "left"):
+            base_state = {
+                "placements": [],
+                "gaps": [],
+                "types_used": set(used_types),
+            }
+            for gap_size in range(1, self.min_fbs_cells):
+                gap_pos = start + gap_size
                 if gap_pos >= end:
                     break
                 if self._can_fill_gap_with_mono(row, start, gap_pos):
+                    gap_score = self._compute_gap_score(
+                        base_state,
+                        gap_size,
+                        gap_start=start,
+                        gap_end=gap_pos,
+                    )
                     states.append(
                         {
                             "pos": gap_pos,
                             "placements": [],
-                            "score": -gap_end * 0.5,
+                            "score": gap_score,
                             "gaps": [(start, gap_pos)],
                             "types_used": set(used_types) | {0},
                         }
                     )
 
         return states
+
+    def _has_blocked_near(self, pos: int, side: str) -> bool:
+        """Check if any row has blocked cells near position."""
+        for r in range(self.num_rows):
+            if side == "left":
+                if pos > 0 and self.blocked[r, pos - 1] == 1:
+                    return True
+                if self.blocked[r, pos] == 1:
+                    return True
+            else:
+                if pos < self.num_cells and self.blocked[r, pos] == 1:
+                    return True
+                if pos < self.num_cells - 1 and self.blocked[r, pos + 1] == 1:
+                    return True
+        return False
 
     def _expand_beam(
         self, beam: List[Dict], row: int, start: int, end: int
@@ -330,7 +382,13 @@ class FBSSolver:
             if not self._can_fill_gap_with_mono(row, pos + cells, end):
                 return None
 
-            gap_score = self._compute_gap_score(state, remaining)
+            gap_start = pos + cells
+            gap_score = self._compute_gap_score(
+                state,
+                remaining,
+                gap_start=gap_start,
+                gap_end=end,
+            )
             return {
                 "pos": end,
                 "placements": state["placements"] + [(pos, cells, h_rows, bt.id)],
@@ -338,7 +396,7 @@ class FBSSolver:
                 + self._score_block(bt, cells)
                 + self._type_score(bt.id, state)
                 + gap_score,
-                "gaps": state["gaps"] + [(pos + cells, end)],
+                "gaps": state["gaps"] + [(gap_start, end)],
                 "types_used": state["types_used"] | {bt.id, 0},
             }
 
@@ -354,21 +412,42 @@ class FBSSolver:
 
     def _can_fill_gap_with_mono(self, row: int, gap_start: int, gap_end: int) -> bool:
         """Check if gap at wall edge can be filled with monolith."""
-        # Monolith at left wall edge: only if blocked
-        if gap_start == 0 and self.blocked[row, 0] == 0:
-            return False
+        # Monolith at left wall edge: only if blocked on any row
+        if gap_start == 0:
+            if self.blocked[row, 0] != 1:
+                return False
 
-        # Monolith at right wall edge: only if blocked
-        if gap_end == self.num_cells and self.blocked[row, gap_end - 1] == 0:
-            return False
+        if gap_end == self.num_cells:
+            if self.blocked[row, gap_end - 1] != 1:
+                return False
 
         return True
 
-    def _compute_gap_score(self, state: Dict, gap_size: int) -> float:
+    def _compute_gap_score(
+        self,
+        state: Dict,
+        gap_size: int,
+        gap_start: int = -1,
+        gap_end: int = -1,
+    ) -> float:
         """Compute score penalty for monolith gap."""
         mono_penalty = gap_size * 0.5
         type_penalty = 0 if 0 in state["types_used"] else -5.0
-        return -mono_penalty + type_penalty
+
+        # Prefer gap near blocked zones (any row)
+        position_bonus = 0.0
+        near_blocked_right = gap_end >= 0 and self._has_blocked_near(gap_end, "right")
+        near_blocked_left = gap_start >= 0 and self._has_blocked_near(gap_start, "left")
+
+        if near_blocked_right or near_blocked_left:
+            position_bonus = 5.0
+        else:
+            position_bonus = -10.0
+
+        # Penalty for multiple gaps — prefer consolidating monolith
+        multi_gap_penalty = -20.0 * len(state["gaps"])
+
+        return -mono_penalty + type_penalty + position_bonus + multi_gap_penalty
 
     def _type_score(self, type_id: int, state: Dict) -> float:
         """Bonus for reusing types."""
