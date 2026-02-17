@@ -48,6 +48,8 @@ class SolverPipeline:
         self.overhang_analyzer: Optional[OverhangAnalyzer] = None
         self.wall_nodes: Dict[int, Tuple[Tuple[float, float], Tuple[float, float]]] = {}
 
+        self.t_junctions: Dict[int, List] = {}
+
         self.block_types = [
             SolverBlockType(id=bt.id, length=bt.length, height=bt.height)
             for bt in BLOCK_TYPES
@@ -58,6 +60,10 @@ class SolverPipeline:
         self.overhang_analyzer = OverhangAnalyzer(G)
         if wall_node_mapping:
             self.wall_nodes = wall_node_mapping
+
+    def set_t_junctions(self, t_junctions: Dict[int, List]) -> None:
+        """Set T-junction info from WallPlanner."""
+        self.t_junctions = t_junctions
 
     def get_overhang_constraints(
         self,
@@ -116,6 +122,7 @@ class SolverPipeline:
                 left_occupied,
                 openings_map,
                 is_cycle,
+                results,
             )
 
             results[wall.id] = result
@@ -125,7 +132,9 @@ class SolverPipeline:
             if i < len(walls) - 1 or is_cycle:
                 next_wall = walls[(i + 1) % len(walls)]
                 width_cells = next_wall.weight // self.grid_step
-                left_occupied = self._extract_edge(result.grid, "right", width_cells)
+                left_occupied = self._compute_left_occupied(
+                    result, wall, next_wall, width_cells
+                )
                 current_bonding = 1 - current_bonding
             else:
                 left_occupied = None
@@ -148,6 +157,7 @@ class SolverPipeline:
         left_occupied: Optional[np.ndarray],
         openings_map: Optional[Dict[int, List]],
         is_cycle: bool = False,
+        results: Optional[Dict[int, SolverResult]] = None,
     ) -> SolverResult:
         """Process single wall with constraints from neighbors."""
         num_rows = wall.height // self.row_height
@@ -159,13 +169,35 @@ class SolverPipeline:
             right_wall = walls[index + 1] if index < len(walls) - 1 else None
             left_wall = walls[index - 1] if index > 0 else None
 
+        # Skip edge bonding if neighbor connects via T-junction (mid-wall)
+        t_neighbor_ids = self._get_t_junction_neighbors(wall.id)
+        if left_wall and left_wall.id in t_neighbor_ids:
+            left_wall = None
+        if right_wall and right_wall.id in t_neighbor_ids:
+            right_wall = None
+
         # Build blocked mask
         blocked = self._build_chess_pattern_mask(
             num_rows, wall.num_cells, bonding, left_wall, right_wall
         )
 
-        if left_occupied is not None:
+        # Skip left_occupied if previous wall connects via T-junction
+        prev_wall = walls[index - 1] if index > 0 else None
+        is_t_junction_transition = (
+            prev_wall is not None and prev_wall.id in t_neighbor_ids
+        )
+        if left_occupied is not None and not is_t_junction_transition:
             blocked = self._merge_occupied(blocked, left_occupied)
+
+        # T-junction constraints at mid-wall offset (this wall is host)
+        for junc in self.t_junctions.get(wall.id, []):
+            neighbor_result = results.get(junc.neighbor_wall_id) if results else None
+            self._apply_t_junction_constraints(
+                blocked, wall, junc, neighbor_result, bonding
+            )
+
+        # Reverse T-junction: this wall is a branch into another wall's body
+        self._apply_reverse_t_junction(blocked, wall, bonding, results)
 
         solver = self._prepare_solver(wall, blocked, openings_map)
 
@@ -230,6 +262,121 @@ class SolverPipeline:
                     blocked[r, c] = True
 
         return blocked
+
+    def _get_t_junction_neighbors(self, wall_id: int) -> set:
+        """Get all wall IDs connected via T-junction (both directions)."""
+        neighbors = {j.neighbor_wall_id for j in self.t_junctions.get(wall_id, [])}
+        # Reverse: wall_id is a branch into another wall's body
+        for host_id, junctions in self.t_junctions.items():
+            for j in junctions:
+                if j.neighbor_wall_id == wall_id:
+                    neighbors.add(host_id)
+        return neighbors
+
+    def _apply_reverse_t_junction(
+        self,
+        blocked: np.ndarray,
+        wall: WallInstance,
+        bonding: int,
+        results: Optional[Dict[int, SolverResult]],
+    ) -> None:
+        """Apply chess-pattern on branch wall's edge that connects to host."""
+        for host_id, junctions in self.t_junctions.items():
+            for junc in junctions:
+                if junc.neighbor_wall_id != wall.id:
+                    continue
+                # This wall branches into host — apply bonding at right edge
+                width_cells = junc.neighbor_thickness_mm // self.grid_step
+                self._apply_bonding_pattern(blocked, bonding, -width_cells, None)
+                # Merge host's occupied cells at junction offset
+                if results and host_id in results:
+                    host_grid = results[host_id].grid
+                    offset_cells = junc.offset_mm // self.grid_step
+                    occupied = self._extract_at_offset(
+                        host_grid, offset_cells, width_cells
+                    )
+                    self._merge_occupied_at_edge(blocked, occupied, "right")
+
+    def _merge_occupied_at_edge(
+        self,
+        blocked: np.ndarray,
+        occupied: np.ndarray,
+        side: str,
+    ) -> None:
+        """Merge occupied cells at wall edge."""
+        min_rows = min(blocked.shape[0], occupied.shape[0])
+        width = occupied.shape[1]
+        for r in range(min_rows):
+            for c in range(width):
+                if not occupied[r, c]:
+                    continue
+                if side == "right":
+                    target = blocked.shape[1] - width + c
+                else:
+                    target = c
+                if 0 <= target < blocked.shape[1]:
+                    blocked[r, target] = True
+
+    def _apply_t_junction_constraints(
+        self,
+        blocked: np.ndarray,
+        wall: WallInstance,
+        junc,
+        neighbor_result: Optional[SolverResult],
+        bonding: int,
+    ) -> None:
+        """Apply chess-pattern and occupied cells at T-junction offset."""
+        offset_cells = junc.offset_mm // self.grid_step
+        width_cells = junc.neighbor_thickness_mm // self.grid_step
+        half = width_cells // 2
+
+        col_start = max(0, offset_cells - half)
+        col_end = min(blocked.shape[1], offset_cells + half + width_cells % 2)
+
+        self._apply_bonding_pattern(blocked, bonding, col_start, col_end)
+
+    def _merge_occupied_at_offset(
+        self,
+        blocked: np.ndarray,
+        neighbor_grid: np.ndarray,
+        col_start: int,
+        width_cells: int,
+    ) -> None:
+        """Merge occupied cells from neighbor edge into blocked at offset."""
+        edge = neighbor_grid[:, :width_cells] > 0
+        min_rows = min(blocked.shape[0], edge.shape[0])
+        for r in range(min_rows):
+            for c in range(edge.shape[1]):
+                target = col_start + c
+                if edge[r, c] and 0 <= target < blocked.shape[1]:
+                    blocked[r, target] = True
+
+    def _extract_at_offset(
+        self, grid: np.ndarray, offset_cells: int, width_cells: int
+    ) -> np.ndarray:
+        """Extract occupied cells at a mid-wall offset."""
+        half = width_cells // 2
+        col_start = max(0, offset_cells - half)
+        col_end = min(grid.shape[1], offset_cells + half + width_cells % 2)
+        edge = grid[:, col_start:col_end]
+
+        return edge > 0
+
+    def _compute_left_occupied(
+        self,
+        result: SolverResult,
+        current_wall: WallInstance,
+        next_wall: WallInstance,
+        width_cells: int,
+    ) -> np.ndarray:
+        """Compute left_occupied for next wall: edge-to-edge or T-junction."""
+        # Check if next wall is a T-junction branch of current wall
+        for junc in self.t_junctions.get(current_wall.id, []):
+            if junc.neighbor_wall_id == next_wall.id:
+                offset_cells = junc.offset_mm // self.grid_step
+                return self._extract_at_offset(result.grid, offset_cells, width_cells)
+
+        return self._extract_edge(result.grid, "right", width_cells)
 
     def _prepare_solver(
         self,

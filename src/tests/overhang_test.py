@@ -127,6 +127,8 @@ def run_pipeline_test(
     for item in planner.traversal:
         pipeline.wall_nodes[item.wall_id] = (item.start_point, item.end_point)
 
+    pipeline.set_t_junctions(planner.get_t_junctions())
+
     is_cycle = planner.get_stats()["has_cycles"]
     result = pipeline.solve_chain(walls, is_cycle=is_cycle)
 
@@ -201,17 +203,18 @@ def test_door_opening():
 
 
 def test_t_junction():
-    """T-junction: 2 horizontal walls + 1 vertical branch."""
+    """T-junction: wall 2 branches into wall 1 midpoint."""
     result = run_pipeline_test(
-        x_start=[0, 2000, 2000],
-        y_start=[2000, 2000, 2000],
-        x_end=[2000, 4000, 2000],
-        y_end=[2000, 2000, 0],
-        wall_ids=[1, 2, 3],
+        x_start=[0, 2000],
+        y_start=[2000, 2000],
+        x_end=[4000, 2000],
+        y_end=[2000, 0],
+        wall_ids=[1, 2],
         test_name="T-Junction",
     )
 
-    assert len(result.wall_results) == 3
+    # Wall 1 split into 2 segments, but seen_originals skips second segment
+    assert len(result.wall_results) == 2
     assert result.total_stats["total_fbs"] > 0
 
 
@@ -330,14 +333,14 @@ def test_real_data():
 
 def test_pipeline_with_overhang():
     """Test pipeline with overhang constraints (T-junction scenario)."""
-    # T-junction: wall 3 connects at interior joint
+    # T-junction: wall 2 branches into wall 1 midpoint
     planner = WallPlanner(grid_step=GRID_STEP)
     planner.add_walls_from_coords(
-        x_start=[0, 2000, 2000],
-        y_start=[2000, 2000, 2000],
-        x_end=[2000, 4000, 2000],
-        y_end=[2000, 2000, 0],
-        wall_ids=[1, 2, 3],
+        x_start=[0, 2000],
+        y_start=[2000, 2000],
+        x_end=[4000, 2000],
+        y_end=[2000, 0],
+        wall_ids=[1, 2],
     )
     planner.process()
 
@@ -348,20 +351,16 @@ def test_pipeline_with_overhang():
     for item in planner.traversal:
         pipeline.wall_nodes[item.wall_id] = (item.start_point, item.end_point)
 
-    # Check overhang constraints
     oh1 = pipeline.get_overhang_constraints(1)
     oh2 = pipeline.get_overhang_constraints(2)
-    oh3 = pipeline.get_overhang_constraints(3)
 
     print(f"\n{'=' * 70}")
     print("T-JUNCTION OVERHANG CONSTRAINTS")
     print(f"{'=' * 70}")
     print(f"  Wall 1: L={oh1[0]}mm R={oh1[1]}mm")
     print(f"  Wall 2: L={oh2[0]}mm R={oh2[1]}mm")
-    print(f"  Wall 3: L={oh3[0]}mm R={oh3[1]}mm")
 
-    # Check that overhang system is working (not all zeros)
-    all_constraints = [oh1, oh2, oh3]
+    all_constraints = [oh1, oh2]
     has_interior = any(c[0] == 500 or c[1] == 500 for c in all_constraints)
     assert has_interior, "T-junction should have at least one interior joint (500mm)"
 

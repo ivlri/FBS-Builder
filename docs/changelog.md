@@ -1,5 +1,49 @@
 # Changelog
 
+## 2026-02-17: Циклические цепочки стен + оптимизация монолита
+
+### 1. Поддержка циклов в SolverPipeline
+
+**Проблема:** В L-shape и замкнутых контурах стены образуют цикл. Pipeline обрабатывал их линейно — первая и последняя стены не получали chess-pattern bonding друг с другом.
+
+**Решение:** Параметр `is_cycle: bool` в `solve_chain()` и `_process_single_wall()`.
+
+**Файлы:** `src/solver/solver_pipeline.py`, `src/tests/overhang_test.py`
+
+- При `is_cycle=True`: `wall[0]` видит `wall[-1]` как left_wall, `wall[-1]` видит `wall[0]` как right_wall
+- Авто-определение цикла в тестах через `planner.get_stats()["has_cycles"]`
+
+### 2. Консолидация монолита
+
+**Проблема:** Монолит размазывался по двум сторонам стены (gap слева + gap справа) вместо одной зоны.
+
+**Решение:** Передача `has_mono_left`/`has_mono_right` из `_solve_segment_mixed` в beam search.
+
+**Файл:** `src/solver/solver.py`
+
+- `_solve_segment_mixed` определяет forced mono зоны (где FBS не помещается из-за seam constraints)
+- `_solve_segment_beam` и `_build_initial_states` принимают `has_mono_right`
+- Если `has_mono_right=True`, beam search не генерирует left-gap варианты — монолит консолидируется в одну зону
+
+### 3. Запрет монолита на свободном торце
+
+**Проблема:** Монолит разрешался на краю стены если blocked был на любом ряду, а не на текущем.
+
+**Решение:** `_can_place_mono_at` и `_can_fill_gap_with_mono` проверяют `blocked[row, pos]` только на текущем ряду.
+
+### 4. Исправление подсчёта монолита в summary
+
+**Проблема:** Монолит (h_rows=1) создавал отдельные instances на row 0 и row 1 — оба попадали в summary одного слоя, удваивая длину.
+
+**Решение:** `_format_layer_summary` пропускает h_rows=1 instances на нечётных рядах.
+
+### 5. Scoring: предпочтение монолита рядом с blocked
+
+**Файл:** `src/solver/solver.py`
+
+- `_has_blocked_near(pos, side)` — проверка blocked рядом с позицией
+- `_compute_gap_score` — position_bonus +5 рядом с blocked, -10 вдали; multi_gap_penalty -20 за каждый существующий gap
+
 ## 2026-02-16: Ограничение блоков 300мм в solver
 
 ### Проблема

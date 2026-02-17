@@ -45,6 +45,15 @@ class WallData:
 
 
 @dataclass
+class JunctionInfo:
+    """T-junction: a neighbor wall branches into the body of a host wall."""
+
+    neighbor_wall_id: int
+    offset_mm: int
+    neighbor_thickness_mm: int
+
+
+@dataclass
 class TraversalItem:
     wall_id: int
     original_wall_id: int
@@ -289,3 +298,64 @@ class WallPlanner:
             self.processed_graph.number_of_edges()
             >= self.processed_graph.number_of_nodes()
         )
+
+    def get_t_junctions(self) -> Dict[int, List[JunctionInfo]]:
+        """Find T-junction points: which walls branch into which walls and where."""
+        if self.processed_graph is None:
+            return {}
+
+        t_split_points = self._find_t_split_points()
+        point_to_originals = self._build_point_to_walls_map()
+        return self._build_junction_map(t_split_points, point_to_originals)
+
+    def _find_t_split_points(self) -> Dict[Point, Set[int]]:
+        """Find graph nodes created by T-joint splits."""
+        t_nodes: Dict[Point, Set[int]] = {}
+        for u, v, data in self.processed_graph.edges(data=True):
+            wid = str(data.get("wall_id", ""))
+            if "_T" not in wid:
+                continue
+            orig_id = int(data["original_wall_id"])
+            for pt in [u, v]:
+                t_nodes.setdefault(pt, set()).add(orig_id)
+        return t_nodes
+
+    def _build_junction_map(
+        self,
+        t_split_points: Dict[Point, Set[int]],
+        point_to_originals: Dict[Point, Set[int]],
+    ) -> Dict[int, List[JunctionInfo]]:
+        """Build mapping: host_wall_id -> list of junctions."""
+        result: Dict[int, List[JunctionInfo]] = {}
+
+        for pt, split_originals in t_split_points.items():
+            all_at_point = point_to_originals.get(pt, set())
+            for host_id in split_originals:
+                neighbors = all_at_point - {host_id}
+                if not neighbors:
+                    continue
+                offset = self._compute_offset_along_wall(host_id, pt)
+                for neighbor_id in neighbors:
+                    neighbor_data = self.wall_data[neighbor_id]
+                    junc = JunctionInfo(
+                        neighbor_wall_id=neighbor_id,
+                        offset_mm=offset,
+                        neighbor_thickness_mm=neighbor_data.weight,
+                    )
+                    result.setdefault(host_id, []).append(junc)
+
+        return result
+
+    def _compute_offset_along_wall(self, wall_id: int, point: Point) -> int:
+        """Distance from wall start to point, adjusted for neighbor thickness at start."""
+        wall = self.wall_data[wall_id]
+        dx = point[0] - wall.x_start
+        dy = point[1] - wall.y_start
+        raw_offset = int(math.sqrt(dx * dx + dy * dy))
+
+        # Account for adjusted length shift at start
+        start_thick, _ = self._get_edge_neighbors(wall_id)
+        if start_thick is not None:
+            raw_offset += start_thick // 2
+
+        return (raw_offset // self.grid_step) * self.grid_step
