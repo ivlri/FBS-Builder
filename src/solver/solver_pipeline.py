@@ -88,6 +88,7 @@ class SolverPipeline:
         walls: List[WallInstance],
         initial_bonding: int = 0,
         openings_map: Optional[Dict[int, List]] = None,
+        is_cycle: bool = False,
     ) -> PipelineResult:
         """
         Solve chain of connected walls with chess-pattern bonding.
@@ -96,6 +97,7 @@ class SolverPipeline:
             walls: Ordered list of walls (left to right)
             initial_bonding: Starting pattern (0 or 1)
             openings_map: Dict mapping wall_id -> list of Opening objects
+            is_cycle: True if walls form a closed contour
         """
         if not walls:
             return PipelineResult({}, {"total_fbs": 0, "total_mono": 0})
@@ -107,16 +109,22 @@ class SolverPipeline:
 
         for i, wall in enumerate(walls):
             result = self._process_single_wall(
-                wall, i, walls, current_bonding, left_occupied, openings_map
+                wall,
+                i,
+                walls,
+                current_bonding,
+                left_occupied,
+                openings_map,
+                is_cycle,
             )
 
             results[wall.id] = result
             total_fbs += result.stats["fbs_count"]
             total_mono += result.stats["monolith_cells"]
 
-            if i < len(walls) - 1:
-                right_wall = walls[i + 1]
-                width_cells = right_wall.weight // self.grid_step
+            if i < len(walls) - 1 or is_cycle:
+                next_wall = walls[(i + 1) % len(walls)]
+                width_cells = next_wall.weight // self.grid_step
                 left_occupied = self._extract_edge(result.grid, "right", width_cells)
                 current_bonding = 1 - current_bonding
             else:
@@ -139,11 +147,17 @@ class SolverPipeline:
         bonding: int,
         left_occupied: Optional[np.ndarray],
         openings_map: Optional[Dict[int, List]],
+        is_cycle: bool = False,
     ) -> SolverResult:
         """Process single wall with constraints from neighbors."""
         num_rows = wall.height // self.row_height
-        right_wall = walls[index + 1] if index < len(walls) - 1 else None
-        left_wall = walls[index - 1] if index > 0 else None
+
+        if is_cycle:
+            right_wall = walls[(index + 1) % len(walls)]
+            left_wall = walls[(index - 1) % len(walls)]
+        else:
+            right_wall = walls[index + 1] if index < len(walls) - 1 else None
+            left_wall = walls[index - 1] if index > 0 else None
 
         # Build blocked mask
         blocked = self._build_chess_pattern_mask(
@@ -443,7 +457,17 @@ def _format_layer_summary(instances: Dict, grid_step: int) -> List[str]:
     layer_map = defaultdict(list)
 
     for inst in instances.values():
-        layer = inst["row"] // 2
+        row = inst["row"]
+        layer = row // 2
+        h_rows = inst.get("h_rows", 1)
+
+        # Skip duplicate: 1-row block on odd row already counted from even row
+        if h_rows == 1 and row % 2 == 1:
+            even_row = row - 1
+            layer_even = even_row // 2
+            if layer_even == layer:
+                continue
+
         length_mm = (inst["end_cell"] - inst["start_cell"]) * grid_step
         layer_map[layer].append((inst["type_id"], length_mm))
 

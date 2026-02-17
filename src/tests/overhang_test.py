@@ -127,7 +127,8 @@ def run_pipeline_test(
     for item in planner.traversal:
         pipeline.wall_nodes[item.wall_id] = (item.start_point, item.end_point)
 
-    result = pipeline.solve_chain(walls)
+    is_cycle = planner.get_stats()["has_cycles"]
+    result = pipeline.solve_chain(walls, is_cycle=is_cycle)
 
     # 4. Visualize
     print(f"\n{'=' * 70}")
